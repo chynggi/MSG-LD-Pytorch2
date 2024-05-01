@@ -174,6 +174,47 @@ class Downsample(nn.Module):
         return self.op(x)
 
 
+class Downsample_one_dim(nn.Module):
+    """
+    A downsampling module that specifically downsamples a specified dimension of a 5D tensor (batch, channel, depth, height, width),
+    using either a convolution or average pooling. This class uses utility functions to handle different dimensions.
+    
+    Parameters:
+        channels (int): Number of channels in the input and output (if not using a different output channel count).
+        use_conv (bool): Whether to use a convolution for downsampling.
+        target_dim (int): The dimension to downsample (2 for depth, 3 for height, 4 for width).
+        out_channels (int, optional): Specifies a different number of output channels. Defaults to the same as input channels.
+        dims (int): Specifies if the convolution or pooling is 1D, 2D, or 3D.
+    """
+    def __init__(self, channels, use_conv, dims=3, target_dim=2, out_channels=None):
+        super(Downsample_one_dim, self).__init__()
+        self.channels = channels
+        self.out_channels = out_channels or channels
+        self.use_conv = use_conv
+        self.target_dim = target_dim
+        self.dims = dims
+
+        # Create stride and kernel size to downsample only the target dimension
+        stride = [1] * dims
+        kernel_size = [1] * dims
+        stride[target_dim - 2] = 2
+        kernel_size[target_dim - 2] = 2
+
+        if use_conv:
+            # Use a convolutional layer to downsample
+            self.op = conv_nd(dims, self.channels, self.out_channels, kernel_size=tuple(kernel_size), stride=tuple(stride), padding=0)
+
+
+        else:
+            # Use average pooling
+            self.op = avg_pool_nd(dims, kernel_size=tuple(kernel_size), stride=tuple(stride))
+
+    def forward(self, x):
+        # Ensure the input has the expected number of channels
+        assert x.shape[1] == self.channels, f"Expected channel dimension {self.channels}, got {x.shape[1]}"
+        return self.op(x)
+
+
 class ResBlock(TimestepBlock):
     """
     A residual block that can optionally change the number of channels.
@@ -587,6 +628,15 @@ class UNetModel(nn.Module):
                 )
             ]
         )
+
+        self.downsample_layers = nn.ModuleList(                 # List to store corresponding Downsample layers
+            [
+                Downsample_one_dim(self.model_channels, conv_resample, dims=dims, target_dim = 2) # Add Downsample layer corresponding to each added block
+            ]
+
+
+        )  
+
         self._feature_size = model_channels
         input_block_chans = [model_channels]
         ch = model_channels
@@ -638,6 +688,7 @@ class UNetModel(nn.Module):
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
+                self.downsample_layers.append(Downsample_one_dim(ch, conv_resample, dims=dims, target_dim = 2)) # Add Downsample layer corresponding to each added block
                 self._feature_size += ch
                 input_block_chans.append(ch)
             if level != len(channel_mult) - 1:
@@ -662,6 +713,7 @@ class UNetModel(nn.Module):
                         )
                     )
                 )
+                self.downsample_layers.append(Downsample_one_dim(ch, conv_resample, dims=dims, target_dim = 2))  # Add Downsample layer corresponding to each added block
                 ch = out_ch
                 input_block_chans.append(ch)
                 ds *= 2
@@ -714,6 +766,8 @@ class UNetModel(nn.Module):
             ),
         )
         self._feature_size += ch
+
+        self.downsample_layers_after_middle_block = Downsample_one_dim(ch, conv_resample, dims=dims, target_dim = 2)
 
         self.output_blocks = nn.ModuleList([])
         for level, mult in list(enumerate(channel_mult))[::-1]:
@@ -850,8 +904,11 @@ class UNetModel(nn.Module):
             h = module(h, emb, context)
             hs.append(h)
         h = self.middle_block(h, emb, context)
-        for module in self.output_blocks:
-            h = th.cat([h, hs.pop()], dim=1)
+        h = self.downsample_layers_after_middle_block(h)
+        for i, module in enumerate(self.output_blocks):
+            hs_ = hs.pop()
+            hs_ = self.downsample_layers[len(self.downsample_layers) - 1 - i](hs_)
+            h = th.cat([h, hs_], dim=1)
             h = module(h, emb, context)
         h = h.type(x.dtype)
         if self.predict_codebook_ids:

@@ -425,6 +425,63 @@ class CLAPResidualVQ(nn.Module):
 
            
 
+class Patch_Cond_Model(nn.Module):
+    def __init__(self, 
+                sampling_rate = 16000,
+                embed_mode = "fbank",        
+                unconditional_prob=0.1,
+                 ):
+        super(Patch_Cond_Model, self).__init__()
+
+        self.sampling_rate = sampling_rate
+        self.embed_mode = embed_mode
+        self.embed_mode_orig = embed_mode
+
+        self.encode_first_stage = None
+        self.get_first_stage_encoding = None
+        self.num_stems = None
+
+        self.unconditional_token = self.get_unconditional_condition(1)[0]
+        self.unconditional_prob = unconditional_prob
+
+    def get_unconditional_condition(self, batchsize):
+        shape = (batchsize, 1, 8, 256, 16)
+
+        # Define the fill value
+        fill_value = - 100.00
+
+        # Create the tensor filled with the specified number
+        return torch.full(shape, fill_value)
+        
+
+    def make_decision(self, probability):
+        if float(torch.rand(1)) < probability:
+            return True
+        else:
+            return False
+
+    def forward(self, batch):
+        # First process x with SubModel1
+        encoder_posterior = self.encode_first_stage(batch)
+        embed = self.get_first_stage_encoding(encoder_posterior).detach()
+
+        # Initialize a tensor to store the expanded embeddings
+        expanded_embed = torch.zeros(embed.size(0), self.num_stems, *embed.shape[1:], device=embed.device)
+
+        for i in range(embed.size(0)):
+            # Optionally modify embed[i] based on a decision
+            if self.make_decision(self.unconditional_prob):
+                modified_embed = self.unconditional_token
+            else:
+                modified_embed = embed[i]
+
+            # Assuming you want to replicate the modified embed to fill all stems
+            expanded_embed[i] = modified_embed.repeat(self.num_stems, 1, 1, 1)
+
+        # embed = embed.unsqueeze(1)
+        # [bs, 1, 8, 256, 16]
+        return expanded_embed.detach()
+
         
         
 

@@ -178,6 +178,7 @@ def main(config):
     max_epochs = config["trainer"]["max_epochs"]
     limit_train_batches = config["trainer"]["limit_train_batches"]
     limit_val_batches = config["trainer"]["limit_val_batches"]
+    precision = config["trainer"]["precision"]
 
     print(f'Running on {accelerator} with devices: {devices}')
 
@@ -199,6 +200,7 @@ def main(config):
         if (len(devices) > 1)
         else None,
         callbacks=[checkpoint_callback],
+        precision=precision,
     )
     if config['mode'] in ["test", "validate"]:
         # Evaluation / Validation

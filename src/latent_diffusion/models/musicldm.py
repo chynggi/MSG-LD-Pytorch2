@@ -860,6 +860,15 @@ class MusicLDM(DDPM):
             self.register_buffer("scale_factor", torch.tensor(scale_factor))
         self.instantiate_first_stage(first_stage_config)
         self.instantiate_cond_stage(cond_stage_config)
+
+        # Patch VAE functions into cond_stage_model
+        #####################
+        if cond_stage_config['target'] == 'latent_diffusion.modules.encoders.modules.Patch_Cond_Model':
+            self.cond_stage_model.encode_first_stage = self.encode_first_stage
+            self.cond_stage_model.get_first_stage_encoding = self.get_first_stage_encoding
+            self.cond_stage_model.num_stems = self.num_stems
+        #####################
+
         self.cond_stage_forward = cond_stage_forward
         self.clip_denoised = False
         self.bbox_tokenizer = None
@@ -2306,6 +2315,11 @@ class MusicLDM(DDPM):
                     mel, savepath=waveform_save_path, bs=None, name=fnames, save=False
                 )
 
+                # Convert dtype to float32 if it is float16
+                if waveform.dtype == 'float16':
+                    waveform = waveform.astype('float32')
+                    
+
                 # downmix to songs for comparison
                 waveform_reshaped = waveform.reshape(batch_size, self.num_stems, waveform.shape[-1])
                 mix = waveform_reshaped.sum(axis=1)
@@ -3078,7 +3092,7 @@ class DiffusionWrapper(pl.LightningModule):
         if self.conditioning_key is None:
             out = self.diffusion_model(x, t)
         elif self.conditioning_key == "concat":
-            xc = torch.cat([x] + c_concat, dim=1)
+            xc = torch.cat([x] + c_concat, dim=2)
             out = self.diffusion_model(xc, t)
         elif self.conditioning_key == "crossattn":
             cc = torch.cat(c_crossattn, 1)
