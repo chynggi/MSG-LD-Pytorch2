@@ -450,6 +450,9 @@ class AutoencoderKL(pl.LightningModule):
             self.wave_decoder = Generator(input_channel=512)
             self.wave_decoder.train()
 
+    def get_device(self):
+        return self.device
+    
     def get_log_dir(self):
         if (
             self.logger_save_dir is None

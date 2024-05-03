@@ -867,6 +867,7 @@ class MusicLDM(DDPM):
             self.cond_stage_model.encode_first_stage = self.encode_first_stage
             self.cond_stage_model.get_first_stage_encoding = self.get_first_stage_encoding
             self.cond_stage_model.num_stems = self.num_stems
+            self.cond_stage_model.device = self.first_stage_model.get_device
         #####################
 
         self.cond_stage_forward = cond_stage_forward
