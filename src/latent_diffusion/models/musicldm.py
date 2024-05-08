@@ -823,6 +823,9 @@ class MusicLDM(DDPM):
         base_learning_rate=None,
         latent_mixup=0.,
         num_stems=None,
+        seperate_stem_z = False,
+        use_silence_weight = False,
+        tau = 3.0,
         *args,
         **kwargs,
     ):
@@ -880,6 +883,10 @@ class MusicLDM(DDPM):
             self.restarted_from_ckpt = True
 
         self.z_channels = first_stage_config["params"]["ddconfig"]["z_channels"]
+
+        self.seperate_stem_z = seperate_stem_z
+        self.use_silence_weight = use_silence_weight
+        self.tau = tau
 
     def configure_optimizers(self):
         lr = self.learning_rate
@@ -1564,7 +1571,7 @@ class MusicLDM(DDPM):
 
     def shared_step(self, batch, **kwargs):
         x, c = self.get_input(batch, self.first_stage_key)
-        loss = self(x, c)
+        loss = self(x, c, batch=batch, **kwargs)
         return loss
 
     def forward(self, x, c, *args, **kwargs):
@@ -1637,7 +1644,19 @@ class MusicLDM(DDPM):
         )
         return mean_flat(kl_prior) / np.log(2.0)
 
-    def p_losses(self, x_start, cond, t, noise=None):
+    def denoise_one_step(self, x, t, e_t): 
+        # parameters       
+        b_t = extract_into_tensor(self._buffers["betas"], t, x.shape)
+        a_t = 1 - b_t
+        sqrt_one_minus_alphas_cumprod_t = extract_into_tensor(self._buffers["sqrt_one_minus_alphas_cumprod"], t, x.shape)
+        # sqrt_one_minus_at = torch.sqrt(1.0 - a_t)
+        # # denoising
+        # pred_x0 = (x - sqrt_one_minus_at * e_t) / a_t.sqrt()
+        # return pred_x0 
+        return (x - e_t * b_t / sqrt_one_minus_alphas_cumprod_t) / a_t.sqrt()
+
+
+    def p_losses(self, x_start, cond, t, noise=None, *args, **kwargs):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         model_output = self.apply_model(x_noisy, t, cond)
@@ -1652,7 +1671,21 @@ class MusicLDM(DDPM):
         else:
             raise NotImplementedError()
         # print(model_output.size(), target.size())
-        loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3, 4])
+        if self.use_silence_weight:
+            batch = kwargs.pop('batch', None)  # Extract 'batch' from 'kwargs'
+            
+            z_mask = torch.nn.functional.interpolate(batch['fbank_stems'], size=(256, 16), mode='nearest')
+
+            z_mask = torch.exp( - z_mask / self.tau)
+
+            loss_simple = self.get_loss(model_output, target, mean=False).mean([2])
+            loss_simple = loss_simple * z_mask
+            loss_simple = loss_simple.mean([1, 2, 3])
+        else:
+            loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3, 4])
+
+
+
         loss_dict.update({f"{prefix}/loss_simple": loss_simple.mean()})
 
         logvar_t = self.logvar[t].to(self.device)
@@ -1668,9 +1701,35 @@ class MusicLDM(DDPM):
         loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
         loss_dict.update({f"{prefix}/loss_vlb": loss_vlb})
         loss += self.original_elbo_weight * loss_vlb
-        loss_dict.update({f"{prefix}/loss": loss})
 
+
+
+        #*******************************************************************
+        ## loss term that pushes stems far from each other in z space
+        if self.seperate_stem_z:
+            x_t_1 = self.denoise_one_step(x_noisy, t, model_output)
+            seperation_loss = self.channel_separation_loss(x_t_1)
+            loss_dict.update({f"{prefix}/loss_separation": seperation_loss})
+            loss += 0.00001 * seperation_loss
+        #*******************************************************************
+
+        loss_dict.update({f"{prefix}/loss": loss})
         return loss, loss_dict
+
+
+    def channel_separation_loss(self,z):
+        bs, num_channels, _, _, _ = z.shape
+        loss = 0.0
+        # Iterate over pairs of channels
+        for i in range(num_channels):
+            for j in range(i + 1, num_channels):
+                # Compute the squared Euclidean distance between channels i and j
+                diff = z[:, i] - z[:, j]
+                distance_squared = (diff ** 2).sum(dim=[1, 2, 3])  # Sum over all dimensions except the batch dimension
+                loss += distance_squared.mean()  # Average over the batch dimension
+
+        # The negative of the sum of distances (because we want to maximize the distance)
+        return -loss
 
     def p_mean_variance(
         self,
