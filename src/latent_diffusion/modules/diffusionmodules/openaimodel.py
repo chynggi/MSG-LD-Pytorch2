@@ -629,13 +629,14 @@ class UNetModel(nn.Module):
             ]
         )
 
-        # self.downsample_layers = nn.ModuleList(                 # List to store corresponding Downsample layers
-        #     [
-        #         Downsample_one_dim(self.model_channels, conv_resample, dims=dims, target_dim = 2) # Add Downsample layer corresponding to each added block
-        #     ]
+        self.downsample_layers = nn.ModuleList(                 # List to store corresponding Downsample layers
+            [
+                th.nn.Identity()
+                #Downsample(self.model_channels, False, dims=dims) # Add Downsample layer corresponding to each added block
+            ]
 
 
-        # )  
+        )  
 
         self._feature_size = model_channels
         input_block_chans = [model_channels]
@@ -688,7 +689,9 @@ class UNetModel(nn.Module):
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
-                # self.downsample_layers.append(Downsample_one_dim(ch, conv_resample, dims=dims, target_dim = 2)) # Add Downsample layer corresponding to each added block
+                self.downsample_layers.append(th.nn.Identity()
+                    # Downsample(self.model_channels, False, dims=dims)
+                    ) # Add Downsample layer corresponding to each added block
                 self._feature_size += ch
                 input_block_chans.append(ch)
             if level != len(channel_mult) - 1:
@@ -713,7 +716,7 @@ class UNetModel(nn.Module):
                         )
                     )
                 )
-                # self.downsample_layers.append(Downsample_one_dim(ch, conv_resample, dims=dims, target_dim = 2))  # Add Downsample layer corresponding to each added block
+                self.downsample_layers.append(Downsample(1, False, dims=dims))  # Add Downsample layer corresponding to each added block
                 ch = out_ch
                 input_block_chans.append(ch)
                 ds *= 2
@@ -900,13 +903,30 @@ class UNetModel(nn.Module):
             emb = th.cat([emb, self.film_emb(y)], dim=-1)
 
         h = x.type(self.dtype)
-        for module in self.input_blocks:
+        h, mix = th.chunk(h, chunks=2, dim=2)
+
+        mix_list = []
+        mix = mix[:, 0:1, :, :, :]
+        mix_list.append(mix)
+        for i in range(len(self.downsample_layers)):
+            mix = self.downsample_layers[i](mix)
+            mix_list.append(mix)
+
+        # for module in self.input_blocks:
+        for i, module in enumerate(self.input_blocks):
+            mix_i = mix_list[i]
+            mix_to_add =  mix_i.repeat(1, h.shape[1], 1, 1, 1)
+            h = h + mix_to_add        
             h = module(h, emb, context)
             hs.append(h)
         h = self.middle_block(h, emb, context)
-        h = self.middle_block(h, emb, context)
-        for module in self.output_blocks:
+        for i, module in enumerate(self.output_blocks):
             h = th.cat([h, hs.pop()], dim=1)
+
+            mix_i = mix_list[len(mix_list)-i-1]
+            mix_to_add =  mix_i.repeat(1, h.shape[1], 1, 1, 1)
+            h = h + mix_to_add
+
             h = module(h, emb, context)
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
