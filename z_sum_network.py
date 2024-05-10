@@ -65,34 +65,62 @@ from torch.utils.checkpoint import checkpoint
 import soundfile as sf
 from pytorch_lightning.loggers import WandbLogger
 import torchaudio
+import datetime
 
+# Current date and time for unique folder names
+current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
+# Base directory for logs and checkpoints
+base_log_dir = Path(config["log_directory"]) / "z_sum_net"
+run_log_dir = base_log_dir / f"run_{current_datetime}"
+os.makedirs(run_log_dir, exist_ok=True)
 
-log_project = os.path.join(log_path, "z_sum_net")
-os.makedirs(log_project, exist_ok=True)
+# Save the configuration file in the run directory
+config_file_path = run_log_dir / "config.yaml"
+with open(config_file_path, 'w') as file:
+    yaml.dump(config, file)
 
+# Setting up the checkpoint callback to save checkpoints in a subdirectory named after the current date and time
+checkpoint_callback = ModelCheckpoint(
+    dirpath=run_log_dir / "checkpoints",
+    filename="{epoch}-{step}",
+    save_top_k=1,  # Save only the best checkpoint
+    monitor="val_loss",  # Assuming you want to monitor validation loss
+    mode="min",
+    save_last=True
+)
 
 # Initialize wandb logging
-wandb_logger = WandbLogger(project="z_sum_net", log_model=False, save_dir=log_project)
+wandb_logger = WandbLogger(project="z_sum_net", log_model=False, save_dir=run_log_dir)
+wandb_logger.experiment.name = f"z_sum_net_{current_datetime}"  # Naming the WandB run
 
+
+
+class ZSum_conv_simple_Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv3d(4, 4, (1, 3, 3), padding=(0, 1, 1))
+        self.conv2 = nn.Conv2d(8, 8, (3, 3), padding=1)
+
+    def forward(self, x):
+        # Apply the first convolution
+        x = self.conv1(x)
+        # Sum along the dimension 1 (size 4), maintaining the other dimensions
+        x = torch.sum(x, dim=1)
+        # Apply the second convolution
+        x = self.conv2(x)
+        return x
 
 
 
 class z_sum_net(pl.LightningModule):
-    def __init__(self, model, learning_rate=0.001, dataset=None):
+    def __init__(self, learning_rate=0.001):
         super().__init__()
 
-        # Define the initial convolutional layer
-        self.conv1 = nn.Conv3d(in_channels=4, out_channels=4, kernel_size=(1, 3, 3), padding=(0, 1, 1))
-
-        # Define the final convolutional layers to adjust dimensions
-        self.conv2 = nn.Conv2d(in_channels=8, out_channels=8, kernel_size=(3, 3), padding=(1, 1))
-
+        # Define layers within a dictionary
+        self.z_sum_model = ZSum_conv_simple_Model()
 
         self.learning_rate = learning_rate
-
-        # Example of a frozen sub-network (let's use a simple linear layer)
-        self.frozen_network = model
 
     def get_input(self, batch):
         z, _ = latent_diffusion.get_input(batch, latent_diffusion.first_stage_key)
@@ -100,18 +128,7 @@ class z_sum_net(pl.LightningModule):
         return z, z_mix
 
     def forward(self, z):
-
-        # Apply the first convolution
-        z = self.conv1(z)  # shape becomes [bs, 4, 8, 256, 16]
-
-        # Sum along the dimension 1 (size 4), maintaining the other dimensions
-        z = torch.sum(z, dim=1)  # shape becomes [bs, 8, 256, 16]
-
-        # Apply the second convolution
-        z = self.conv2(z)  # adjusting channel dimensions to match the output
-        
-        return z
-            
+        return self.z_sum_model(z)        
 
     def configure_optimizers(self):
         # Explicitly optimize only self.vector
@@ -120,13 +137,11 @@ class z_sum_net(pl.LightningModule):
 
 
     def latent_to_waveform(self, z):
-
-        mel = self.frozen_network.decode_first_stage(z)
-
-        waveform = self.frozen_network.mel_spectrogram_to_waveform(mel, save=False)
+        mel = latent_diffusion.decode_first_stage(z)
+        waveform = latent_diffusion.mel_spectrogram_to_waveform(mel, save=False)
         waveform = np.nan_to_num(waveform)
         waveform = np.clip(waveform, -1, 1)
-        return mel.numpy(), waveform
+        return mel.cpu().numpy(), waveform
 
     def training_step(self, batch, batch_idx):
 
@@ -134,11 +149,13 @@ class z_sum_net(pl.LightningModule):
         
         z_mix_hat = self(z)
 
-
-        # Compute MSE loss on waveform
+        # compute mse loss
         loss = nn.functional.mse_loss(z_mix_hat, z_mix)
 
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
+        if batch_idx>0 and batch_idx % 100 == 0:  # Log every 100 batches
+            self.log_audio(z_mix, z_mix_hat, 'train')
 
         return loss
 
@@ -150,8 +167,8 @@ class z_sum_net(pl.LightningModule):
         self.log('val_loss', val_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         
-        if batch_idx == 0:  # Optionally log only for the first batch of each epoch
-            self.log_audio(z_mix, z_mix_hat, 'val')
+        # if batch_idx == 0:  # Optionally log only for the first batch of each epoch
+        self.log_audio(z_mix, z_mix_hat, 'val')
 
         return val_loss
 
@@ -166,37 +183,49 @@ class z_sum_net(pl.LightningModule):
         
         for i in range(waveform_mix.shape[0]):
             log_dict = {}
+
+            log_dict[f"{stage} /Mel"] = [wandb.Image(mel_mix[i].squeeze().T, caption=f"{stage} Orig {i}"),
+                                         wandb.Image(mel_mix_hat[i].squeeze().T, caption=f"{stage} Reconst {i}")]
+
             audio_clip = waveform_mix[i][0]
-            log_dict[f"{stage} Orig Audio"] = wandb.Audio(audio_clip, sample_rate=sample_rate, caption=f"{stage} Sample {i}")
-            log_dict[f"{stage} Orig Mel"] = wandb.Image(mel_mix[i].squeeze().T, caption=f"{stage} Mel {i}")
+            log_dict[f"{stage} /Orig Audio"] = wandb.Audio(audio_clip, sample_rate=sample_rate, caption=f"{stage} Sample {i}")
 
             audio_clip = waveform_mix_hat[i][0]
-            log_dict[f"{stage} Reconst Audio"] = wandb.Audio(audio_clip, sample_rate=sample_rate, caption=f"{stage} Sample {i}")
-            log_dict[f"{stage} Reconst Mel"] = wandb.Image(mel_mix_hat[i].squeeze().T, caption=f"{stage} Mel {i}")
+            log_dict[f"{stage} /Reconst Audio"] = wandb.Audio(audio_clip, sample_rate=sample_rate, caption=f"{stage} Sample {i}")
 
-            # wandb.log(log_dict)
             self.logger.experiment.log(log_dict)
 
 # Model
-model = z_sum_net(model = latent_diffusion) #.to("cuda:0")
+model = z_sum_net(learning_rate = config['model']['params']['base_learning_rate'])
 
 
 # Specify the path to your checkpoint
-checkpoint_path = None #"/home/karchkhadze/MusicLDM-Ext/lightning_logs/z_sum_net/z_sum_net/emur7c9k/checkpoints/epoch=53-step=540.ckpt"
+checkpoint_path = config['trainer']['resume_from_checkpoint']
+
+latent_diffusion = latent_diffusion.to(f"cuda:{config['trainer']['devices'][0]}")
 
 # # Train
-trainer = Trainer(max_epochs=10000, 
+trainer = Trainer(max_epochs=config['trainer']['max_epochs'], 
                 logger=wandb_logger,
                 num_sanity_val_steps=0,
-                accelerator="cpu", 
-                limit_train_batches= 2,
-                limit_val_batches=2,
-                # accelerator="gpu", 
-                # devices = [0],
-                    # default_root_dir=default_root_dir,
+                callbacks=[checkpoint_callback],  # Add other callbacks if needed
+                # accelerator="cpu", 
+                limit_train_batches= config['trainer']['limit_train_batches'],
+                limit_val_batches=config['trainer']['limit_val_batches'],
+                accelerator=config['trainer']['accelerator'], 
+                devices = config['trainer']['devices'],
                 log_every_n_steps=1,
-                resume_from_checkpoint=checkpoint_path,
+                default_root_dir=run_log_dir 
                 )
 
-trainer.fit(model, data)
+# trainer.fit(model, data, ckpt_path= checkpoint_path)
 
+if config['mode'] in ["test", "validate"]:
+    # Evaluation / Validation
+    trainer.validate(model, data, ckpt_path=checkpoint_path)
+if config['mode'] == "validate_and_train":
+    # Training
+    trainer.validate(model, data, ckpt_path=checkpoint_path)
+    trainer.fit(model, data, ckpt_path=checkpoint_path)
+elif config['mode'] == "train":
+    trainer.fit(model, data, ckpt_path=checkpoint_path)
