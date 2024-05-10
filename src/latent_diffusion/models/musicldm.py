@@ -866,7 +866,7 @@ class MusicLDM(DDPM):
 
         # Patch VAE functions into cond_stage_model
         #####################
-        if cond_stage_config['target'] == 'latent_diffusion.modules.encoders.modules.Patch_Cond_Model':
+        if 'target' in cond_stage_config and cond_stage_config['target'] == 'latent_diffusion.modules.encoders.modules.Patch_Cond_Model':
             self.cond_stage_model.encode_first_stage = self.encode_first_stage
             self.cond_stage_model.get_first_stage_encoding = self.get_first_stage_encoding
             self.cond_stage_model.num_stems = self.num_stems
