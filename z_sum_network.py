@@ -118,38 +118,6 @@ class z_sum_net(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return optimizer
 
-    # def on_train_start(self):
-    #     """Hook called before the training starts, used to log the original track."""
-    #     batch = next(iter(self.train_dataloader()))
-    #     y = batch[0][0]
-    #     if isinstance(y, torch.Tensor):
-    #         y = y.cpu().numpy()  # Ensure the tensor is on CPU and convert to NumPy
-    #     for i in range(min(y.shape[0], 4)):  # Log up to four samples from the batch
-    #         sample_rate = 16000  # Assuming the sample rate is 16000Hz
-    #         wandb.log({f"Original Audio {i}": wandb.Audio(y[i], sample_rate=sample_rate, caption=f"Original Sample {i}")})
-
-    #     # for logging the first before training auduos
-    #     self.on_train_epoch_end()             
-
-
-    # def on_train_epoch_end(self, unused=None):
-    #     """This hook is automatically called at the end of each training epoch."""
-    #     if self.current_epoch % 10 == 0:
-    #         waveform = self.separate()
-    #         log_dict = {}
-
-            
-    #         for i in range(min(4, waveform.shape[1])):  # Assumes waveform shape [batch, channels, length]
-    #             audio_clip = waveform[0][i]
-    #             sample_rate = 16000  # Assume sample rate is known
-    #             log_dict [f"Audio Sample {i}"] = wandb.Audio(audio_clip, sample_rate=sample_rate, caption=f"Sample {i}")
-    #             # wandb.log({f"Audio Sample {i}": wandb.Audio(audio_clip, sample_rate=sample_rate, caption=f"Sample {i}")})
-    #         # print("==================")
-    #         new_mix = waveform.sum(1)
-    #         log_dict [f"New mixture"] = wandb.Audio(new_mix[0], sample_rate=sample_rate, caption=f"new mixture")
-    #         # wandb.log({f"New mixture": wandb.Audio(new_mix[0], sample_rate=sample_rate, caption=f"new mixture")})
-
-    #         wandb.log(log_dict)
 
     def latent_to_waveform(self, z):
 
