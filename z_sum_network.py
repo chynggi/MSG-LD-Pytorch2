@@ -112,15 +112,184 @@ class ZSum_conv_simple_Model(nn.Module):
         return x
 
 
+class ZSum_conv_bigger_Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv3d(4, 8, (1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1))
+        self.bn1 = nn.BatchNorm3d(8)
+        self.relu1 = nn.ReLU()
+        
+        self.conv2 = nn.Conv3d(8, 8, (2, 1, 1), stride=(2, 1, 1))  # This will reduce the second dimension from 8 to 4
+        self.bn2 = nn.BatchNorm3d(8)
+        self.relu2 = nn.ReLU()
+        
+        self.conv3 = nn.Conv3d(8, 8, (2, 1, 1), stride=(2, 1, 1))  # Further reduce the second dimension from 4 to 2
+        self.bn3 = nn.BatchNorm3d(8)
+        self.relu3 = nn.ReLU()
+        
+        # Additional layers can be added here
+        
+        self.conv_final = nn.Conv2d(16, 8, (1, 1))  # Adjust this to match the dimensions you need to output
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu1(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu2(x)
+
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.relu3(x)
+
+        # Adjust shape for 2D convolution
+        x = x.view(x.size(0), 16, 256, 16)  # Adjust the view depending on the exact output size needed
+        
+        x = self.conv_final(x)
+        return x
+
+
+class Basic3DResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=(1, 3, 3), padding=(0, 1, 1))
+        self.bn1 = nn.BatchNorm3d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=(1, 3, 3), padding=(0, 1, 1))
+        self.bn2 = nn.BatchNorm3d(out_channels)
+        if in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv3d(in_channels, out_channels, kernel_size=1, stride=1),
+                nn.BatchNorm3d(out_channels),
+            )
+        else:
+            self.downsample = None
+
+    def forward(self, x):
+        identity = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        if self.downsample is not None:
+            identity = self.downsample(x)
+        
+        out += identity
+        out = self.relu(out)
+        return out
+
+class ZSum_conv_Advanced_Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer1 = Basic3DResBlock(4, 8)
+        self.conv1 = nn.Conv3d(8, 8, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+        self.layer2 = Basic3DResBlock(8, 8)
+        self.conv2 = nn.Conv3d(8, 8, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+        self.layer3 = Basic3DResBlock(8, 8)
+        self.conv3 = nn.Conv3d(8, 8, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+        self.final_conv = nn.Conv3d(8, 8, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.conv1(x)
+        x = self.layer2(x)
+        x = self.conv2(x)
+        x = self.layer3(x)
+        x = self.conv3(x)
+        # x = self.final_conv(x)  # This conv layer is designed to reduce the second dimension from 8 to 4
+        x = x.squeeze(2)  # This removes the singleton dimension, adapting from [bs, 8, 1, 256, 16] to [bs, 8, 256, 16]
+        return x
+
+
+class ZSum_conv_big_Advanced_Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer1 = Basic3DResBlock(4, 32)
+        self.conv1 = nn.Conv3d(32, 32, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+        self.layer2 = Basic3DResBlock(32, 16)
+        self.conv2 = nn.Conv3d(16, 16, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+        self.layer3 = Basic3DResBlock(16, 8)
+        self.conv3 = nn.Conv3d(8, 8, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+        self.final_conv = nn.Conv3d(8, 8, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.conv1(x)
+        x = self.layer2(x)
+        x = self.conv2(x)
+        x = self.layer3(x)
+        x = self.conv3(x)
+        # x = self.final_conv(x)  # This conv layer is designed to reduce the second dimension from 8 to 4
+        x = x.squeeze(2)  # This removes the singleton dimension, adapting from [bs, 8, 1, 256, 16] to [bs, 8, 256, 16]
+        return x
+
+
+
+class ZSum_conv_huge_Advanced_Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer_4 = Basic3DResBlock(4, 1024)
+        self.layer_3 = Basic3DResBlock(1024, 512)
+        self.layer_2 = Basic3DResBlock(512, 256)
+        self.layer_1 = Basic3DResBlock(256, 128)
+        self.conv1 = nn.Conv3d(128, 128, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+        
+        self.layer0 = Basic3DResBlock(128, 64)
+        self.layer1 = Basic3DResBlock(64, 32)
+        self.conv2 = nn.Conv3d(32, 32, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+        
+        self.layer2 = Basic3DResBlock(32, 16)
+        self.layer3 = Basic3DResBlock(16, 8)
+        self.conv3 = nn.Conv3d(8, 8, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+        # self.final_conv = nn.Conv3d(8, 8, kernel_size=(2, 1, 1), stride=(2, 1, 1))
+
+    def forward(self, x):
+        x = self.layer_4(x)
+        x = self.layer_3(x)
+        x = self.layer_2(x)
+        x = self.layer_1(x)
+        x = self.conv1(x)
+
+        x = self.layer0(x)
+        x = self.layer1(x)
+        x = self.conv2(x)
+
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.conv3(x)
+        # x = self.final_conv(x)  # This conv layer is designed to reduce the second dimension from 8 to 4
+        x = x.squeeze(2)  # This removes the singleton dimension, adapting from [bs, 8, 1, 256, 16] to [bs, 8, 256, 16]
+        return x
+
+
+# Model registry
+model_registry = {
+    "ZSum_conv_simple_Model": ZSum_conv_simple_Model,
+    "ZSum_conv_bigger_Model": ZSum_conv_bigger_Model,
+    "ZSum_conv_Advanced_Model": ZSum_conv_Advanced_Model,
+    "ZSum_conv_big_Advanced_Model": ZSum_conv_big_Advanced_Model,
+    "ZSum_conv_huge_Advanced_Model": ZSum_conv_huge_Advanced_Model,
+}
 
 class z_sum_net(pl.LightningModule):
-    def __init__(self, learning_rate=0.001):
+    def __init__(self, config):
         super().__init__()
 
-        # Define layers within a dictionary
-        self.z_sum_model = ZSum_conv_simple_Model()
+        self.learning_rate = config['z_sum_net_model']['base_learning_rate']
+        model_type = config['z_sum_net_model']['model_type']
+        self.z_sum_model = self.choose_model(model_type)
 
-        self.learning_rate = learning_rate
+    def choose_model(self, model_type):
+        try:
+            model_class = model_registry[model_type]
+            return model_class()
+        except KeyError:
+            raise ValueError(f"Unknown model type: {model_type}")
+
 
     def get_input(self, batch):
         z, _ = latent_diffusion.get_input(batch, latent_diffusion.first_stage_key)
@@ -167,8 +336,8 @@ class z_sum_net(pl.LightningModule):
         self.log('val_loss', val_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         
-        # if batch_idx == 0:  # Optionally log only for the first batch of each epoch
-        self.log_audio(z_mix, z_mix_hat, 'val')
+        if batch_idx == 0:  # Optionally log only for the first batch of each epoch
+            self.log_audio(z_mix, z_mix_hat, 'val')
 
         return val_loss
 
@@ -196,7 +365,7 @@ class z_sum_net(pl.LightningModule):
             self.logger.experiment.log(log_dict)
 
 # Model
-model = z_sum_net(learning_rate = config['model']['params']['base_learning_rate'])
+model = z_sum_net(config)
 
 
 # Specify the path to your checkpoint
@@ -217,8 +386,6 @@ trainer = Trainer(max_epochs=config['trainer']['max_epochs'],
                 log_every_n_steps=1,
                 default_root_dir=run_log_dir 
                 )
-
-# trainer.fit(model, data, ckpt_path= checkpoint_path)
 
 if config['mode'] in ["test", "validate"]:
     # Evaluation / Validation
