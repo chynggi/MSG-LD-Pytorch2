@@ -275,6 +275,21 @@ model_registry = {
     "ZSum_conv_huge_Advanced_Model": ZSum_conv_huge_Advanced_Model,
 }
 
+from inspect import isfunction
+
+def exists(x):
+    return x is not None
+
+def default(val, d):
+    if exists(val):
+        return val
+    return d() if isfunction(d) else d
+noise=None
+
+
+
+
+
 class z_sum_net(pl.LightningModule):
     def __init__(self, config):
         super().__init__()
@@ -282,6 +297,8 @@ class z_sum_net(pl.LightningModule):
         self.learning_rate = config['z_sum_net_model']['base_learning_rate']
         model_type = config['z_sum_net_model']['model_type']
         self.z_sum_model = self.choose_model(model_type)
+        self.add_noise = config['z_sum_net_model']['add_noise']
+        self.num_stems = config['model']['params']['num_stems']
 
     def choose_model(self, model_type):
         try:
@@ -295,6 +312,20 @@ class z_sum_net(pl.LightningModule):
         z, _ = latent_diffusion.get_input(batch, latent_diffusion.first_stage_key)
         z_mix, _ = latent_diffusion.get_input(batch, "fbank")
         return z, z_mix
+
+    def add_noise_func(self, z, z_mix, noise=None):
+        t = torch.randint(
+            0, latent_diffusion.num_timesteps, (z.shape[0],), device=self.device
+        ).long()
+
+        noise = default(noise, lambda: torch.randn_like(z_mix))
+
+        z_mix_noisy = latent_diffusion.q_sample(x_start=z_mix, t=t, noise=noise)
+
+        noise_repeat = noise.unsqueeze(1).repeat(1, self.num_stems, 1, 1, 1)
+        z_noisy =  latent_diffusion.q_sample(x_start=z, t=t, noise=noise_repeat)
+
+        return z_noisy, z_mix_noisy
 
     def forward(self, z):
         return self.z_sum_model(z)        
@@ -315,6 +346,9 @@ class z_sum_net(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         z, z_mix = self.get_input(batch)
+
+        if self.add_noise:
+             z, z_mix = self.add_noise_func(z, z_mix)
         
         z_mix_hat = self(z)
 
@@ -324,7 +358,7 @@ class z_sum_net(pl.LightningModule):
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         if batch_idx>0 and batch_idx % 100 == 0:  # Log every 100 batches
-            self.log_audio(z_mix, z_mix_hat, 'train')
+            self.log_audio(z_mix[:2], z_mix_hat[:2], 'train')
 
         return loss
 
