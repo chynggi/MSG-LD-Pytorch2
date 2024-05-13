@@ -318,12 +318,21 @@ class z_sum_net(pl.LightningModule):
             0, latent_diffusion.num_timesteps, (z.shape[0],), device=self.device
         ).long()
 
-        noise = default(noise, lambda: torch.randn_like(z_mix))
+        # noise = default(noise, lambda: torch.randn_like(z_mix))
 
-        z_mix_noisy = latent_diffusion.q_sample(x_start=z_mix, t=t, noise=noise)
+        # z_mix_noisy = latent_diffusion.q_sample(x_start=z_mix, t=t, noise=noise)
 
-        noise_repeat = noise.unsqueeze(1).repeat(1, self.num_stems, 1, 1, 1)
-        z_noisy =  latent_diffusion.q_sample(x_start=z, t=t, noise=noise_repeat)
+        # noise_repeat = noise.unsqueeze(1).repeat(1, self.num_stems, 1, 1, 1)
+        # z_noisy =  latent_diffusion.q_sample(x_start=z, t=t, noise=noise_repeat)
+
+        noise = default(noise, lambda: torch.randn_like(z))
+        z_noisy =  latent_diffusion.q_sample(x_start=z, t=t, noise=noise)
+
+        noise_sum = noise.sum(1)
+        z_mix_noisy = latent_diffusion.q_sample(x_start=z_mix, t=t, noise=noise_sum)
+
+        
+        
 
         return z_noisy, z_mix_noisy
 
