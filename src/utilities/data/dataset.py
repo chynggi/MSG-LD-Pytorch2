@@ -661,6 +661,7 @@ class MultiSource_Slakh_Dataset(DS_10283_2325_Dataset):
         super().__init__(dataset_path, label_path, config, train = train, factor = factor, whole_track = whole_track)  
 
         self.text_prompt = config.get('path', {}).get('text_prompt', None)
+        self.stem_masking = config['augmentation']['masking']
 
     def get_duration_sec(self, file, cache=False):
 
@@ -830,6 +831,41 @@ class MultiSource_Slakh_Dataset(DS_10283_2325_Dataset):
 
         return melspec.numpy()
 
+    def mask_audio_channels(self, audio, fbank):
+        """
+        Randomly masks 0, 1, 2, or 3 channels in a 4-channel audio input and updates the corresponding Mel spectrograms.
+        
+        Parameters:
+        audio (list of np.ndarray): 4-channel audio input, where each sublist represents a channel.
+        fbank (list): List to store the Mel spectrograms corresponding to the masked audio.
+        
+        Returns:
+        tuple: (masked_audio, fbank)
+            masked_audio (list of np.ndarray): Audio input with randomly masked channels.
+            fbank (list of np.ndarray): Updated Mel spectrograms corresponding to the masked audio.
+        """
+        num_channels = len(audio)
+        assert num_channels == 4, "Audio input must have 4 channels."
+        
+        # Determine the number of channels to mask (0, 1, 2, or 3)
+        num_channels_to_mask = random.choice(range(num_channels))
+        
+        # Select the channels to mask
+        channels_to_mask = random.sample(range(num_channels), num_channels_to_mask)
+        
+        # Create a copy of the audio list to avoid modifying the original input
+        masked_audio = [channel.copy() for channel in audio]
+        
+        # Apply the mask to the selected channels
+        for channel in channels_to_mask:
+            masked_audio[channel] = np.zeros_like(masked_audio[channel])
+        
+        # Update the Mel spectrograms in the fbank for the masked channels
+        for channel in channels_to_mask:
+            fbank[channel] = np.expand_dims(self.get_mel_from_waveform(masked_audio[channel][0]), axis=0)
+        
+        return masked_audio, fbank
+
 
     def __getitem__(self, index):
         idx = index % len(self.data)
@@ -849,6 +885,10 @@ class MultiSource_Slakh_Dataset(DS_10283_2325_Dataset):
             fbank_list.append(fbank[np.newaxis, :])  # Expand dims for fbank
 
         
+        if self.stem_masking and self.train:
+            audio_list, fbank_list = self.mask_audio_channels(audio_list, fbank_list)
+
+
         # construct dict
         data_dict['fname'] = f['wav_path'].split('/')[-1]+"_from_"+str(int(frame_offset))
         data_dict['fbank_stems'] = np.concatenate(fbank_list, axis=0)
