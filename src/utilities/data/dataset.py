@@ -661,7 +661,7 @@ class MultiSource_Slakh_Dataset(DS_10283_2325_Dataset):
         super().__init__(dataset_path, label_path, config, train = train, factor = factor, whole_track = whole_track)  
 
         self.text_prompt = config.get('path', {}).get('text_prompt', None)
-        self.stem_masking = config['augmentation']['masking']
+        self.stem_masking = config.get('augmentation', {}).get('masking', False)
 
     def get_duration_sec(self, file, cache=False):
 
@@ -897,7 +897,7 @@ class MultiSource_Slakh_Dataset(DS_10283_2325_Dataset):
 
         # Mix audio and fbank features by summing; ensure same length and proper alignment
         # :TODO careful with potential clipping
-        data_dict['waveform'] = np.sum(data_dict['waveform_stems'], axis=0)
+        data_dict['waveform'] = np.clip(np.sum(data_dict['waveform_stems'], axis=0), -1, 1) #np.sum(data_dict['waveform_stems'], axis=0)
         # data_dict['fbank'] = np.sum(data_dict['fbank_stems'], axis=0)
 
         data_dict['fbank'] = self.get_mel_from_waveform(data_dict['waveform'])
