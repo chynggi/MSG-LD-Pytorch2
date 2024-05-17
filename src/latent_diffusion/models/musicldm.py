@@ -700,7 +700,10 @@ class DDPM(pl.LightningModule):
                     dir2_folders = {folder.name for folder in dir2.iterdir() if folder.is_dir()}
 
                     # Find the intersection of folder names existing in both directories
-                    matching_folders = dir1_folders & dir2_folders
+                    # matching_folders = dir1_folders & dir2_folders
+
+                    # Find the intersection of folder names existing in both directories, excluding those with "mel" in their names
+                    matching_folders = {folder for folder in (dir1_folders & dir2_folders) if "mel" not in folder.lower()}
 
                     # Iterate through matching folders and perform operations
                     for folder_name in matching_folders:
@@ -2459,11 +2462,26 @@ class MusicLDM(DDPM):
                     generated_stem_dir = os.path.join(os.path.join(waveform_save_path, "stem_"+str(i)))
                     os.makedirs(generated_stem_dir, exist_ok=True)                    
                     self.save_waveform(waveform[:,i,:][:, np.newaxis, :], generated_stem_dir, name=fnames)
+                    # mel
+                    generated_stem_mel_dir = os.path.join(os.path.join(waveform_save_path, "stem_mel_"+str(i)))
+                    os.makedirs(generated_stem_mel_dir, exist_ok=True) 
+                    for j in range(mel.shape[0]):
+                        file_path =  os.path.join(generated_stem_mel_dir,fnames[j]+".npy")
+                        np.save(file_path, mel[j,i,:])
+
 
                     # target
                     target_stem_dir = os.path.join(os.path.join(wavefor_target_save_path, "stem_"+str(i)))
                     os.makedirs(target_stem_dir, exist_ok=True)                    
                     self.save_waveform(target_waveforms[:,i,:].unsqueeze(1).cpu().detach(), target_stem_dir, name=fnames)
+                    # mel
+                    target_stem_mel_dir = os.path.join(os.path.join(wavefor_target_save_path, "stem_mel_"+str(i)))
+                    os.makedirs(target_stem_mel_dir, exist_ok=True) 
+                    for j in range(mel.shape[0]):
+                        file_path =  os.path.join(target_stem_mel_dir,fnames[j]+".npy")
+                        np.save(file_path, batch['fbank_stems'].cpu().numpy()[j,i,:])
+
+
 
                 ###################################### logging ##############################################     
                 if self.logger is not None:
