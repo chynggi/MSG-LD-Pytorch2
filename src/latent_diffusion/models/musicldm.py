@@ -26,6 +26,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 from latent_diffusion.modules.encoders.modules import CLAPResidualVQ
 import wandb
 from pathlib import Path
+from utilities.sep_evaluation import evaluate_separations
 
 from latent_diffusion.util import (
     log_txt_as_img,
@@ -733,6 +734,39 @@ class DDPM(pl.LightningModule):
                                 )
                                 print(k, self.metrics_buffer[k])
                             self.metrics_buffer = {}
+
+                    # Find the intersection of folder names existing in both directories, excluding those with "mel" in their names
+                    matching_folders = {folder for folder in (dir1_folders & dir2_folders) if "mel" in folder.lower()}
+                    # Iterate through matching folders and perform operations
+                    for folder_name in matching_folders:
+                        folder1 = dir1 / folder_name
+                        folder2 = dir2 / folder_name
+
+                        print("\nNow evaliating:", folder_name)
+
+                        results_mse = evaluate_separations(folder1, folder2)
+
+                        self.metrics_buffer = {
+                            (f"val/{folder_name}/" + k): float(v) for k, v in results_mse.items()
+                        }
+
+                        if len(self.metrics_buffer.keys()) > 0:
+                            for k in self.metrics_buffer.keys():
+                                self.log(
+                                    k,
+                                    self.metrics_buffer[k],
+                                    prog_bar=False,
+                                    logger=True,
+                                    on_step=False,
+                                    on_epoch=True,
+                                )
+                                print(k, self.metrics_buffer[k])
+                            self.metrics_buffer = {}
+
+
+
+
+
                 else:
                     print(
                         "The target folder for evaluation does not exist: %s"
