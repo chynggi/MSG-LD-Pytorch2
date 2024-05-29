@@ -445,36 +445,25 @@ class Patch_Cond_Model(nn.Module):
         self.unconditional_token = self._get_unconditional_condition(1)[0]
         self.unconditional_prob = unconditional_prob
 
-    # def _get_unconditional_condition(self, batchsize):
-    #     shape = (batchsize, 1, 8, 256, 16)
-
-    #     # Define the fill value
-    #     fill_value = - 100.00
-
-    #     # Create the tensor filled with the specified number
-    #     return torch.full(shape, fill_value)
-
-    # def get_unconditional_condition(self, batchsize):
-    #     shape = (batchsize, self.num_stems, 8, 256, 16)
-
-    #     # Define the fill value
-    #     fill_value = - 100.00
-
-    #     # Create the tensor filled with the specified number
-    #     device = self.device()
-    #     return torch.full(shape, fill_value, device=device)
-
-
     def _get_unconditional_condition(self, batchsize):
         shape = (batchsize, 1, 8, 256, 16)
-        # Create the tensor with normal random values
-        return torch.randn(shape)
+
+        # Define the fill value
+        fill_value = 0.0
+
+        # Create the tensor filled with the specified number
+        return torch.full(shape, fill_value)
 
     def get_unconditional_condition(self, batchsize):
         shape = (batchsize, self.num_stems, 8, 256, 16)
+
+        # Define the fill value
+        fill_value = 0.0
+
+        # Create the tensor filled with the specified number
         device = self.device()
-        # Create the tensor with normal random values on the specified device
-        return torch.randn(shape, device=device)
+        return torch.full(shape, fill_value, device=device)
+
 
     def make_decision(self, probability):
         if float(torch.rand(1)) < probability:
