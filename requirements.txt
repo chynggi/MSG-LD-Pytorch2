@@ -1,6 +1,6 @@
 Pillow
 PyYAML
-audioldm-eval
+git+https://github.com/chynggi/audioldm_eval.git
 braceexpand
 deepdiff
 einops
