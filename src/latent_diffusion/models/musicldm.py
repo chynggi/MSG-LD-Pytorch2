@@ -2473,51 +2473,56 @@ class MusicLDM(DDPM):
                 mel = mel.reshape(z.shape[0], self.num_stems, mel.shape[-2], mel.shape[-1]) # back to batch size and multicahnnel
 
                 ############################# saving audios for metrics ##################################
-                # save mixes
-                    #generated
+                save_targets = self.evaluation_params.get("save_targets", True)
+
                 generated_mix_dir = os.path.join(waveform_save_path, "mix")
                 os.makedirs(generated_mix_dir, exist_ok=True)
                 if mix.ndim == 1:
-                    mix = mix[np.newaxis, :] 
+                    mix = mix[np.newaxis, :]
                 self.save_waveform(mix[:, np.newaxis, :], generated_mix_dir, name=fnames)
-                    #target
-                target_mix_dir = os.path.join(wavefor_target_save_path, "mix")
-                os.makedirs(target_mix_dir, exist_ok=True)
-                target_mix = super().get_input(batch, 'waveform')
-                self.save_waveform(target_mix.unsqueeze(1).cpu().detach(), target_mix_dir, name=fnames)
 
-                # save stems
-                target_waveforms = super().get_input(batch, 'waveform_stems')
+                # initialise placeholders for optional target logging
+                target_mix = None
+                target_waveforms = None
+
+                if save_targets:
+                    target_mix_dir = os.path.join(wavefor_target_save_path, "mix")
+                    os.makedirs(target_mix_dir, exist_ok=True)
+                    target_mix = super().get_input(batch, "waveform")
+                    self.save_waveform(target_mix.unsqueeze(1).cpu().detach(), target_mix_dir, name=fnames)
+
                 for i in range(self.num_stems):
-                    
-                    # generated
-                    generated_stem_dir = os.path.join(os.path.join(waveform_save_path, "stem_"+str(i)))
-                    os.makedirs(generated_stem_dir, exist_ok=True)                    
-                    self.save_waveform(waveform[:,i,:][:, np.newaxis, :], generated_stem_dir, name=fnames)
-                    # mel
-                    generated_stem_mel_dir = os.path.join(os.path.join(waveform_save_path, "stem_mel_"+str(i)))
-                    os.makedirs(generated_stem_mel_dir, exist_ok=True) 
+                    generated_stem_dir = os.path.join(waveform_save_path, f"stem_{i}")
+                    os.makedirs(generated_stem_dir, exist_ok=True)
+                    self.save_waveform(waveform[:, i, :][:, np.newaxis, :], generated_stem_dir, name=fnames)
+
+                    generated_stem_mel_dir = os.path.join(waveform_save_path, f"stem_mel_{i}")
+                    os.makedirs(generated_stem_mel_dir, exist_ok=True)
                     for j in range(mel.shape[0]):
-                        file_path =  os.path.join(generated_stem_mel_dir,fnames[j]+".npy")
-                        np.save(file_path, mel[j,i,:])
+                        file_path = os.path.join(generated_stem_mel_dir, fnames[j] + ".npy")
+                        np.save(file_path, mel[j, i, :])
 
+                    if save_targets:
+                        if target_waveforms is None:
+                            target_waveforms = super().get_input(batch, "waveform_stems")
 
-                    # target
-                    target_stem_dir = os.path.join(os.path.join(wavefor_target_save_path, "stem_"+str(i)))
-                    os.makedirs(target_stem_dir, exist_ok=True)                    
-                    self.save_waveform(target_waveforms[:,i,:].unsqueeze(1).cpu().detach(), target_stem_dir, name=fnames)
-                    # mel
-                    target_stem_mel_dir = os.path.join(os.path.join(wavefor_target_save_path, "stem_mel_"+str(i)))
-                    os.makedirs(target_stem_mel_dir, exist_ok=True) 
-                    for j in range(mel.shape[0]):
-                        file_path =  os.path.join(target_stem_mel_dir,fnames[j]+".npy")
-                        np.save(file_path, batch['fbank_stems'].cpu().numpy()[j,i,:])
+                        target_stem_dir = os.path.join(wavefor_target_save_path, f"stem_{i}")
+                        os.makedirs(target_stem_dir, exist_ok=True)
+                        self.save_waveform(
+                            target_waveforms[:, i, :].unsqueeze(1).cpu().detach(),
+                            target_stem_dir,
+                            name=fnames,
+                        )
 
+                        target_stem_mel_dir = os.path.join(wavefor_target_save_path, f"stem_mel_{i}")
+                        os.makedirs(target_stem_mel_dir, exist_ok=True)
+                        fbank_targets = batch["fbank_stems"].cpu().numpy()
+                        for j in range(mel.shape[0]):
+                            file_path = os.path.join(target_stem_mel_dir, fnames[j] + ".npy")
+                            np.save(file_path, fbank_targets[j, i, :])
 
-
-                ###################################### logging ##############################################     
-                if self.logger is not None:
-                    # create new list
+                ###################################### logging ##############################################
+                if self.logger is not None and save_targets and target_waveforms is not None and target_mix is not None:
                     log_data_batch = mel, waveform, target_waveforms, mix, target_mix, fnames, batch
                     self.log_images_audios(log_data_batch)
 

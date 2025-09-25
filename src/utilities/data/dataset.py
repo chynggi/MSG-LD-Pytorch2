@@ -908,6 +908,124 @@ class MultiSource_Slakh_Dataset(DS_10283_2325_Dataset):
         return data_dict
 
 
+class MixtureOnlyDataset(Dataset):
+    """Minimal dataset for mixture-only inference.
+
+    Each entry corresponds to a single mixture waveform. Since reference stems
+    are unavailable, zero-filled placeholders are emitted for stem-dependent
+    tensors so that the existing evaluation loop can run without modification.
+    """
+
+    def __init__(self, dataset_path, label_path, config, train=False, factor=1.0, whole_track=False) -> None:
+        super().__init__()
+
+        if isinstance(dataset_path, (list, omegaconf.listconfig.ListConfig)):
+            raise ValueError("MixtureOnlyDataset expects a single directory path, not a list")
+
+        self.config = config
+        self.dataset_path = dataset_path
+        self.train = train
+        self.whole_track = whole_track
+
+        self.sampling_rate = config["preprocessing"]["audio"]["sampling_rate"]
+        self.hopsize = config["preprocessing"]["stft"]["hop_length"]
+        self.target_length = config["preprocessing"]["mel"]["target_length"]
+        self.segment_length = int(self.target_length * self.hopsize)
+
+        stems = config.get("path", {}).get("stems", [])
+        self.stems = list(stems) if stems else [f"stem_{i}" for i in range(4)]
+        self.num_stems = len(self.stems)
+
+        self.data = sorted(
+            os.path.join(dataset_path, fname)
+            for fname in os.listdir(dataset_path)
+            if fname.lower().endswith((".wav", ".flac", ".mp3", ".ogg"))
+        )
+
+        if not self.data:
+            raise FileNotFoundError(f"No audio files found in {dataset_path}")
+
+        self.STFT = Audio.stft.TacotronSTFT(
+            config["preprocessing"]["stft"]["filter_length"],
+            config["preprocessing"]["stft"]["hop_length"],
+            config["preprocessing"]["stft"]["win_length"],
+            config["preprocessing"]["mel"]["n_mel_channels"],
+            config["preprocessing"]["audio"]["sampling_rate"],
+            config["preprocessing"]["mel"]["mel_fmin"],
+            config["preprocessing"]["mel"]["mel_fmax"],
+        )
+
+        self.total_len = int(len(self.data) * factor)
+        print(f"| MixtureOnly Dataset Length: {len(self.data)} | Epoch Length: {self.total_len}")
+
+    def __len__(self):
+        return self.total_len
+
+    def normalize_wav(self, waveform: torch.Tensor) -> torch.Tensor:
+        waveform = waveform[0]
+        waveform = waveform - waveform.mean()
+        waveform = waveform / (waveform.abs().max() + 1e-8)
+        waveform = waveform * 0.5
+        return waveform.unsqueeze(0)
+
+    def read_wav(self, filename: str) -> torch.Tensor:
+        waveform, sr = torchaudio.load(filename)
+        if sr != self.sampling_rate:
+            waveform = torchaudio.functional.resample(waveform, sr, self.sampling_rate)
+
+        waveform = self.normalize_wav(waveform)
+
+        if not self.whole_track:
+            if waveform.size(1) > self.segment_length:
+                waveform = waveform[:, : self.segment_length]
+            elif waveform.size(1) < self.segment_length:
+                waveform = torch.nn.functional.pad(
+                    waveform, (0, self.segment_length - waveform.size(1)), "constant", 0.0
+                )
+
+        return waveform
+
+    def waveform_to_mel(self, waveform: torch.Tensor) -> torch.Tensor:
+        waveform = waveform.requires_grad_(False)
+        melspec, _, _ = self.STFT.mel_spectrogram(waveform)
+        melspec = melspec[0].T
+
+        if melspec.size(0) < self.target_length:
+            melspec = torch.nn.functional.pad(
+                melspec, (0, 0, 0, self.target_length - melspec.size(0)), "constant", 0.0
+            )
+        else:
+            if not self.whole_track:
+                melspec = melspec[: self.target_length, :]
+
+        if melspec.size(-1) % 2 != 0:
+            melspec = melspec[:, :-1]
+
+        return melspec
+
+    def __getitem__(self, index):
+        idx = index % len(self.data)
+        filepath = self.data[idx]
+
+        waveform = self.read_wav(filepath)
+        fbank = self.waveform_to_mel(waveform)
+
+        waveform_np = waveform.numpy().astype(np.float32)
+        fbank_np = fbank.numpy().astype(np.float32)
+
+        waveform_stems = np.zeros((self.num_stems, waveform_np.shape[-1]), dtype=np.float32)
+        fbank_stems = np.zeros((self.num_stems, fbank_np.shape[0], fbank_np.shape[1]), dtype=np.float32)
+
+        return {
+            "fname": os.path.splitext(os.path.basename(filepath))[0],
+            "waveform": waveform_np.squeeze(0),
+            "waveform_stems": waveform_stems,
+            "fbank": fbank_np,
+            "fbank_stems": fbank_stems,
+            "text": "",
+        }
+
+
 class MUSDB18HQ_Dataset(MultiSource_Slakh_Dataset):
     """Dataset wrapper for MUSDB18-HQ stems.
 

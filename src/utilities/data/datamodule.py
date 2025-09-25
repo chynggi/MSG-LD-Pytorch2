@@ -9,6 +9,7 @@ from utilities.data.dataset import (
     Slakh_Dataset,
     MultiSource_Slakh_Dataset,
     MUSDB18HQ_Dataset,
+    MixtureOnlyDataset,
 )
 import torch
 import omegaconf
@@ -73,6 +74,8 @@ class DataModuleFromConfig(pl.LightningDataModule):
             return MultiSource_Slakh_Dataset
         if self.path["dataset_type"] == "MUSDB18_HQ":
             return MUSDB18HQ_Dataset
+        if self.path["dataset_type"] == "MixtureOnly":
+            return MixtureOnlyDataset
 
         # Add other types of data here!
         else:
