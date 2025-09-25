@@ -8,7 +8,6 @@ https://github.com/CompVis/taming-transformers
 import sys
 import os
 from typing import Any, Callable, List, Optional, Union
-from pytorch_lightning.core.optimizer import LightningOptimizer
 from pytorch_lightning.utilities.types import EPOCH_OUTPUT, STEP_OUTPUT
 
 import torch
@@ -22,7 +21,7 @@ from functools import partial
 from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 from torchvision.utils import make_grid
-from pytorch_lightning.utilities.distributed import rank_zero_only
+from pytorch_lightning.utilities.rank_zero import rank_zero_only
 from latent_diffusion.modules.encoders.modules import CLAPResidualVQ
 import wandb
 from pathlib import Path

@@ -124,7 +124,7 @@ dependencies:
     - laion-clap==1.1.4
     - lazy-loader==0.1
     - librosa==0.10.0
-    - lightning-utilities==0.7.1
+    - lightning-utilities==0.11.3
     - llvmlite==0.39.1
     - markdown==3.4.1
     - markdown-it-py==2.2.0
@@ -154,7 +154,7 @@ dependencies:
     - pyparsing==3.0.9
     - pyproject-hooks==1.0.0
     - pysocks==1.7.1
-    - pytorch-lightning==1.9.4
+    - pytorch-lightning==2.4.0
     - pytz==2022.7.1
     - pywavelets==1.4.1
     - pyyaml==6.0
@@ -189,12 +189,12 @@ dependencies:
     - timm==0.6.12
     - tokenizers==0.13.2
     - tomli==2.0.1
-    - --extra-index-url https://download.pytorch.org/whl/cu116
-    - torch==1.13.1+cu116
-    - torchaudio==0.13.1+cu116
+    - --extra-index-url https://download.pytorch.org/whl/cu128
+    - torch==2.8.0+cu128
+    - torchaudio==2.8.0+cu128
     - torchlibrosa==0.9.2
-    - torchmetrics==0.11.3
-    - torchvision==0.14.1+cu116
+    - torchmetrics==1.4.0
+    - torchvision==0.23.0+cu128
     - tqdm==4.65.0
     - transformers==4.26.1
     - twine==4.0.2

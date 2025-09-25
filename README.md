@@ -39,6 +39,8 @@ then
 conda activate musicldm_env
 ```
 
+> **업데이트**: `musicldm_env.yml`은 CUDA 12.8용 PyTorch 2.8.0 스택을 기준으로 합니다. 새 환경을 만드는 경우 위 커맨드를 그대로 실행하면 되고, 기존 환경을 유지하고 싶다면 `conda env update -f musicldm_env.yml --prune`로 의존성을 갱신하세요. CUDA 12.8을 지원하는 NVIDIA 드라이버(권장 550.xx 이상)가 설치되어 있는지 확인하세요.
+
 
 # Data
 
