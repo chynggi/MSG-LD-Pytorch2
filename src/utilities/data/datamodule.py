@@ -2,7 +2,14 @@ import os
 import pytorch_lightning as pl
 from omegaconf import OmegaConf
 from src.latent_diffusion.util import instantiate_from_config
-from utilities.data.dataset import AudiostockDataset, DS_10283_2325_Dataset, Audiostock_splited_Dataset, Slakh_Dataset, MultiSource_Slakh_Dataset
+from utilities.data.dataset import (
+    AudiostockDataset,
+    DS_10283_2325_Dataset,
+    Audiostock_splited_Dataset,
+    Slakh_Dataset,
+    MultiSource_Slakh_Dataset,
+    MUSDB18HQ_Dataset,
+)
 import torch
 import omegaconf
 
@@ -64,6 +71,8 @@ class DataModuleFromConfig(pl.LightningDataModule):
             return Slakh_Dataset
         if self.path["dataset_type"] == "MultiSource_Slakh":
             return MultiSource_Slakh_Dataset
+        if self.path["dataset_type"] == "MUSDB18_HQ":
+            return MUSDB18HQ_Dataset
 
         # Add other types of data here!
         else:

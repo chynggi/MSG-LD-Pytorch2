@@ -44,11 +44,22 @@ conda activate musicldm_env
 
 # Data
 
-In this project, the Slakh2100 data is used.
+In this project, the Slakh2100 data is used by default.
 
 Please follow the instructions for data download and set up given here:
 
 https://github.com/gladia-research-group/multi-source-diffusion-models/blob/main/data/README.md
+
+### MUSDB18-HQ support
+
+MSG-LD now ships with a dedicated multi-track dataloader for [MUSDB18-HQ](https://sigsep.github.io/datasets/musdb.html).
+
+1. Download and extract the official MUSDB18-HQ package so that you have `train/` and `test/` sub-directories containing stem files (`bass.wav`, `drums.wav`, `other.wav`, `vocals.wav`).
+2. Update the new configuration templates to point at those folders:
+	- `config/MSG-LD/multichannel_musicldm_musdb18_train.yaml`
+	- `config/MSG-LD/multichannel_musicldm_musdb18_eval.yaml`
+3. Optionally adjust the `stems` list if you prepared custom subsets (defaults match the canonical four-stem layout).
+4. The datamodule re-samples the 44.1 kHz stems to the internal 16 kHz rate automatically, so no additional preprocessing is required.
 
 # Training MSG-LD
 
@@ -63,10 +74,14 @@ wget https://zenodo.org/record/10643148/files/vae-ckpt.ckpt
 
 ```
 
-After placing this in some directory and changing corresponding links in the config file, for the trainion of MSG-LD please run:
+After placing this in some directory and changing corresponding links in the config file, train MSG-LD with one of the provided configurations. For example:
 
-```
+```bash
+# Slakh2100 (default)
 python train_musicldm.py --config config/MSG-LD/multichannel_musicldm_slakh_3d_train.yaml
+
+# MUSDB18-HQ (new)
+python train_musicldm.py --config config/MSG-LD/multichannel_musicldm_musdb18_train.yaml
 ```
 <!-- 
 # Checkpoints
@@ -88,8 +103,11 @@ For **separation** and **total generation**, use the following command. Adjust t
 - Set `unconditional_guidance_scale` to `1` or `2` for conditional generation, which performs separation.
 
 ```bash
-# Separation and Total Generation:
+# Separation and Total Generation (Slakh):
 python train_musicldm.py --config config/MSG-LD/multichannel_musicldm_slakh_3d_eval.yaml
+
+# Separation and Total Generation (MUSDB18-HQ):
+python train_musicldm.py --config config/MSG-LD/multichannel_musicldm_musdb18_eval.yaml
 ```
 
 For **arrangement generation**, run the command below and specify the instrument(s) you want to generate in the `stems_to_inpaint` parameter.

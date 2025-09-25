@@ -1,7 +1,6 @@
+import sys
 # Author: David Harwath
 # with some functions borrowed from https://github.com/SeanNaren/deepspeech.pytorch
-import sys
-
 sys.path.append(
     "/home/karchkhadze/MusicLDM-Ext/src"
 )
@@ -907,6 +906,52 @@ class MultiSource_Slakh_Dataset(DS_10283_2325_Dataset):
 
 
         return data_dict
+
+
+class MUSDB18HQ_Dataset(MultiSource_Slakh_Dataset):
+    """Dataset wrapper for MUSDB18-HQ stems.
+
+    MUSDB18-HQ stores each track in a directory containing separate stem files
+    (``bass.wav``, ``drums.wav``, ``other.wav``, ``vocals.wav``). This class reuses
+    the multi-source pipeline while providing sensible defaults for the stem list
+    and robust frame selection for the native 44.1 kHz audio files.
+    """
+
+    DEFAULT_STEMS = ("bass", "drums", "other", "vocals")
+
+    def __init__(self, dataset_path, label_path, config, train=True, factor=1.0, whole_track=False) -> None:
+        path_cfg = config.get("path", {}) if isinstance(config, dict) else config.path
+        stems = path_cfg.get("stems") if path_cfg else None
+        if not stems:
+            default = list(self.DEFAULT_STEMS)
+            if isinstance(path_cfg, omegaconf.DictConfig):
+                path_cfg["stems"] = default
+            elif isinstance(config, dict):
+                config.setdefault("path", {})["stems"] = default
+        super().__init__(dataset_path, label_path, config, train=train, factor=factor, whole_track=whole_track)
+
+    def read_wav(self, filename, frame_offset):
+        info = torchaudio.info(filename)
+        native_sr = info.sample_rate
+
+        segment_seconds = self.segment_length / float(self.sampling_rate)
+        num_frames = int(np.ceil(segment_seconds * native_sr))
+        frame_offset_samples = int(frame_offset * native_sr)
+
+        waveform, sr = torchaudio.load(filename, frame_offset=frame_offset_samples, num_frames=num_frames)
+
+        if sr != self.sampling_rate:
+            waveform = torchaudio.functional.resample(waveform, sr, self.sampling_rate)
+
+        if not self.whole_track:
+            if waveform.size(1) > self.segment_length:
+                waveform = waveform[:, : self.segment_length]
+            elif waveform.size(1) < self.segment_length:
+                waveform = torch.nn.functional.pad(
+                    waveform, (0, self.segment_length - waveform.size(1)), "constant", 0.0
+                )
+
+        return waveform
 
 
 class Dataset(Dataset):
