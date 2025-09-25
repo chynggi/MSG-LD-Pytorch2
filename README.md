@@ -14,32 +14,14 @@ To install MSG-LD, follow these steps:
 
 Clone the repository to your local machine
 ```bash
-$ git clone https://github.com/karchkha/MSG-LD
+$ git clone https://github.com/chynggi/MSG-LD-Pytorch2
 ```
 
-To run the code in this repository, you will need python 3.9 
+To run the code in this repository, you will need python 3.9+ 
 
 Navigate to the project directory and install the required dependencies
 
-If you already installed conda before, skip this step, otherwise:
-```
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-bash Miniconda3-latest-Linux-x86_64.sh
-```
-Then, after installing you should make sure your conda environment is running on your bash
 
-
-```
-conda env create -f musicldm_env.yml
-``` 
-
-
-then 
-```
-conda activate musicldm_env
-```
-
-> **업데이트**: `musicldm_env.yml`은 CUDA 12.8용 PyTorch 2.8.0 스택을 기준으로 합니다. 새 환경을 만드는 경우 위 커맨드를 그대로 실행하면 되고, 기존 환경을 유지하고 싶다면 `conda env update -f musicldm_env.yml --prune`로 의존성을 갱신하세요. CUDA 12.8을 지원하는 NVIDIA 드라이버(권장 550.xx 이상)가 설치되어 있는지 확인하세요.
 
 
 # Data
