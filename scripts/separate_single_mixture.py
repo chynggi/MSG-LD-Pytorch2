@@ -207,11 +207,10 @@ def render_segments(
     segments = segments.to(device)
     batch_size = max(1, batch_size)
     num_segments = segments.size(0)
-    cm_factory = (
-        lambda: torch.autocast(device_type=device.type, dtype=torch.float16)
-        if use_fp16 and device.type == "cuda"
-        else nullcontext
-    )
+    if use_fp16 and device.type == "cuda":
+        cm_factory = lambda: torch.autocast(device_type=device.type, dtype=torch.float16)  # noqa: E731
+    else:
+        cm_factory = lambda: nullcontext()  # noqa: E731
 
     outputs: List[np.ndarray] = []
     iterator = range(0, num_segments, batch_size)

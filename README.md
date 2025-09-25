@@ -124,3 +124,26 @@ Key flags:
 The script writes one WAV file per stem plus a reconstructed mixture to the
 requested output directory.
 
+## 🚀 Batch folder separation
+
+To demix an entire directory of songs in one go, run the batch helper. It
+reuses the same weights and parameters as the single-track script but iterates
+over every supported audio file in the folder (recursively if requested):
+
+```bash
+python scripts/separate_folder_mixtures.py \
+	--config config/MSG-LD/multichannel_musicldm_musdb18_eval.yaml \
+	--checkpoint /path/to/lightning_logs/.../checkpoints/last.ckpt \
+	--input-dir path/to/mixtures \
+	--output-dir outputs/batch
+```
+
+Useful optional flags:
+
+- `--recursive`: descend into subfolders when searching for audio files.
+- `--skip-existing`: continue from where you left off by skipping already
+	rendered stem folders.
+- `--extensions .wav .flac`: control which file endings count as mixtures.
+- `--per-file-progress`: enables the inner diffusion progress bar if you want
+	detailed feedback per song.
+
