@@ -8,7 +8,6 @@ https://github.com/CompVis/taming-transformers
 import sys
 import os
 from typing import Any, Callable, List, Optional, Union
-from pytorch_lightning.utilities.types import EPOCH_OUTPUT, STEP_OUTPUT
 
 import torch
 import torch.nn as nn
