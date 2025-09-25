@@ -99,3 +99,28 @@ For **arrangement generation**, run the command below and specify the instrument
 python train_musicldm.py --config config/MSG-LD/multichannel_musicldm_slakh_3d_eval_inpaint.yaml
 ```
 
+## 🔧 Quick single-file separation
+
+When you only need to demix a *single* mixture file (instead of running the full
+evaluation loop), use the lightweight helper in `scripts/separate_single_mixture.py`:
+
+```bash
+python scripts/separate_single_mixture.py \
+	--config config/MSG-LD/multichannel_musicldm_musdb18_eval.yaml \
+	--checkpoint /path/to/lightning_logs/.../checkpoints/last.ckpt \
+	--mixture path/to/song.wav \
+	--output-dir outputs/song
+```
+
+Key flags:
+
+- `--overlap`: cross-fade ratio between consecutive segments (defaults to `0`).
+- `--guidance-scale`: classifier-free guidance strength (same semantics as the
+	Lightning evaluation entry point).
+- `--use-plms`: switch from DDIM to PLMS sampling.
+- `--batch-size`: number of chunks processed in parallel (useful when you have
+	multiple GPUs).
+
+The script writes one WAV file per stem plus a reconstructed mixture to the
+requested output directory.
+
