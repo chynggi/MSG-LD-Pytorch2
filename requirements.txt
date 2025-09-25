@@ -7,7 +7,6 @@ einops
 flash-attn
 ftfy
 h5py
-horovod
 ipdb
 ipython
 librosa
