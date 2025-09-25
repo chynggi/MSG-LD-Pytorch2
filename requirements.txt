@@ -17,6 +17,7 @@ pandas
 pytorch-lightning
 regex
 requests
+resampy
 scikit-learn
 scipy
 soundfile
