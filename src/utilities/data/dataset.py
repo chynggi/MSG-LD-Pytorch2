@@ -38,10 +38,10 @@ class TextDataset(Dataset):
         self.logfile = logfile
     def __getitem__(self, index):
         data_dict = {}
-         # construct dict
+        # construct dict
         data_dict['fname'] = f"infer_file_{index}"
-        data_dict['fbank'] = np.zeros((1024,64))
-        data_dict['waveform'] = np.zeros((32000))
+        data_dict['fbank'] = np.zeros((1024,64), dtype=np.float32)
+        data_dict['waveform'] = np.zeros((32000,), dtype=np.float32)
         data_dict['text'] = self.data[index]
         if index == 0:
             with open(os.path.join(self.logfile), 'w') as f:
@@ -74,6 +74,16 @@ class AudiostockDataset(Dataset):
         self.target_length = config["preprocessing"]["mel"]["target_length"]
         self.use_blur = config["preprocessing"]["mel"]["blur"]
         self.segment_length = int(self.target_length * self.hopsize)
+        self.downsampling_ratio = (
+            config.get("preprocessing", {})
+            .get("audio", {})
+            .get("downsampling_ratio")
+        )
+        if self.downsampling_ratio:
+            remainder = self.segment_length % self.downsampling_ratio
+            if remainder != 0:
+                self.segment_length += self.downsampling_ratio - remainder
+                self.target_length = int(self.segment_length / self.hopsize)
         self.whole_track = whole_track
 
         self.data = []
@@ -95,6 +105,12 @@ class AudiostockDataset(Dataset):
             self.target_length = int(self.segment_size / self.hopsize)
             self.segment_length = int(self.target_length * self.hopsize)
             assert self.segment_size % self.hopsize == 0
+            if self.downsampling_ratio:
+                remainder = self.segment_length % self.downsampling_ratio
+                if remainder != 0:
+                    self.segment_length += self.downsampling_ratio - remainder
+                    self.segment_size = self.segment_length
+                    self.target_length = int(self.segment_length / self.hopsize)
             print("Use segment size of %s." % self.segment_size)
         except:
             self.segment_size = None
@@ -322,8 +338,8 @@ class AudiostockDataset(Dataset):
 
         
         # construct dict
-        data_dict['fbank_stems'] = np.concatenate(fbank_list, axis=0)
-        data_dict['waveform_stems'] = np.concatenate(audio_list, axis=0)
+        data_dict['fbank_stems'] = np.concatenate(fbank_list, axis=0).astype(np.float32, copy=False)
+        data_dict['waveform_stems'] = np.concatenate(audio_list, axis=0).astype(np.float32, copy=False)
 
         return data_dict
 
@@ -891,7 +907,7 @@ class MultiSource_Slakh_Dataset(DS_10283_2325_Dataset):
         # construct dict
         data_dict['fname'] = f['wav_path'].split('/')[-1]+"_from_"+str(int(frame_offset))
         data_dict['fbank_stems'] = np.concatenate(fbank_list, axis=0)
-        data_dict['waveform_stems'] = np.concatenate(audio_list, axis=0)
+        data_dict['waveform_stems'] = np.concatenate(audio_list, axis=0).astype(np.float32, copy=False)
         # data_dict['text'] = text
 
         # Mix audio and fbank features by summing; ensure same length and proper alignment
@@ -1265,7 +1281,7 @@ class Dataset(Dataset):
             return waveform
 
         # Pad
-        temp_wav = np.zeros((1, self.segment_length))
+        temp_wav = np.zeros((1, self.segment_length), dtype=np.float32)
         rand_start = int(self.random_uniform(0, self.segment_length - waveform_length))
         # rand_start = 0
 

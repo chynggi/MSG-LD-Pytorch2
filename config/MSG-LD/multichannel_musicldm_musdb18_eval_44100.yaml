@@ -61,6 +61,7 @@ data:
       audio:
         sampling_rate: 44100
         max_wav_value: 32768.0
+        downsampling_ratio: 1024
       stft:
         filter_length: 1024
         hop_length: 256
@@ -85,10 +86,10 @@ model:
     num_timesteps_cond: 1
     log_every_t: 200
     timesteps: 1000
-    first_stage_key: fbank_stems
+  first_stage_key: waveform_stems
     cond_stage_key: fbank
     latent_t_size: 256
-    latent_f_size: 16
+  latent_f_size: 1
     channels: 4
     cond_stage_trainable: False
     latent_mixup: 0.0
@@ -122,46 +123,12 @@ model:
         num_head_channels: 32
         use_spatial_transformer: False
     first_stage_config:
-      base_learning_rate: 4.5e-05
-      target: latent_encoder.autoencoder.AutoencoderKL
+    first_stage_config:
+      target: latent_encoder.ear_vae.model.EARVAE
       params:
-        reload_from_ckpt: lightning_logs/musicldm_checkpoints/vae-ckpt.ckpt
-        batchsize: 4
-        monitor: val/rec_loss
-        image_key: fbank
-        subband: 1
-        embed_dim: 8
-        time_shuffle: 1
-        mel_num: 128
-        lossconfig:
-          target: latent_diffusion.modules.losses.LPIPSWithDiscriminator
-          params:
-            disc_start: 50001
-            kl_weight: 1.0
-            disc_weight: 0.5
-            disc_in_channels: 1
-        ddconfig:
-          double_z: true
-          hifigan_ckpt:
-          z_channels: 8
-          resolution: 256
-          downsample_time: false
-          in_channels: 1
-          out_ch: 1
-          ch: 128
-          ch_mult:
-            - 1
-            - 2
-            - 4
-          num_res_blocks: 2
-          attn_resolutions: []
-          dropout: 0.0
-        vocoder:
-          type: discoder
-          device: cpu
-          sample_rate: 44100
-          mel_bins: 128
-          repo_id: disco-eth/discoder
+        pretrained_name: descript/ear-vae-44khz
+        stems: 4
+        reduce_to_mono: true
     cond_stage_config:
       target: latent_diffusion.modules.encoders.modules.Patch_Cond_Model
       params:

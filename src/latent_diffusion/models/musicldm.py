@@ -937,6 +937,10 @@ class MusicLDM(DDPM):
             raise KeyError("Unable to determine latent channel count for first-stage model.")
         self.z_channels = z_channels
 
+        latent_freq_bins = getattr(self.first_stage_model, "latent_frequency_bins", None)
+        if latent_freq_bins is not None:
+            self.latent_f_size = int(latent_freq_bins)
+
         self.seperate_stem_z = seperate_stem_z
         self.use_silence_weight = use_silence_weight
         self.tau = tau
@@ -1035,6 +1039,30 @@ class MusicLDM(DDPM):
         self.first_stage_model.train = disabled_train
         for param in self.first_stage_model.parameters():
             param.requires_grad = False
+        self._sync_first_stage_model_metadata()
+
+    def _sync_first_stage_model_metadata(self) -> None:
+        stage = getattr(self, "first_stage_model", None)
+        if stage is None:
+            return
+
+        stage_key = getattr(stage, "first_stage_key", None)
+        if stage_key:
+            self.first_stage_key = stage_key
+
+        latent_channels = getattr(stage, "z_channels", None)
+        if latent_channels is None:
+            latent_channels = getattr(stage, "latent_channels", None)
+        if latent_channels is not None:
+            self.z_channels = int(latent_channels)
+
+        latent_freq = getattr(stage, "latent_frequency_bins", None)
+        if latent_freq is not None:
+            self.latent_f_size = int(latent_freq)
+
+        downsample = getattr(stage, "downsampling_ratio", None)
+        if downsample is not None:
+            self.downsampling_ratio = int(downsample)
 
     def instantiate_cond_stage(self, config):
         model = instantiate_from_config(config)
@@ -1233,36 +1261,49 @@ class MusicLDM(DDPM):
         return tensor_reshaped
 
     def adapt_latent_for_LDM(self, tensor):
-        # Now, dynamically calculate the new shape for z to ensure batch_size remains unchanged
-        new_height, new_width = tensor.shape[-2:]
-        
-        # # Check if num_channels matches the model's num_stems
-        assert new_height == self.latent_t_size, f"latent_t_size ({new_height}) does not match model's latent_t_size ({self.latent_t_size})"
-        assert new_width == self.latent_f_size, f"latent_t_size ({new_height}) does not match model's latent_t_size ({self.latent_f_size})"
+        if tensor.dim() == 5:
+            return tensor
+        if tensor.dim() != 4:
+            raise ValueError(
+                f"Expected latent tensor with 4 or 5 dimensions, received shape {tuple(tensor.shape)}"
+            )
 
-        # new_num_channels = self.num_stems #* self.z_channels
+        batch_times_stems, channels, new_height, new_width = tensor.shape
+        if channels != self.z_channels:
+            raise ValueError(
+                f"Latent channel mismatch: received {channels}, expected {self.z_channels}."
+            )
+        if batch_times_stems % self.num_stems != 0:
+            raise ValueError(
+                f"Latent batch dimension {batch_times_stems} is not divisible by number of stems {self.num_stems}."
+            )
 
-        # # Calculate new number of channels based on the total number of elements in z divided by (batch_size * height * width)
-        # total_elements = tensor.numel()
-        # batch_size = total_elements // (new_num_channels * new_height * new_width)
+        if self.latent_t_size != new_height:
+            self.latent_t_size = new_height
+        if self.latent_f_size != new_width:
+            self.latent_f_size = new_width
 
-        tensor_reshaped = tensor.view(-1, self.num_stems, self.z_channels, new_height, new_width)
-
+        new_batch = batch_times_stems // self.num_stems
+        tensor_reshaped = tensor.view(new_batch, self.num_stems, self.z_channels, new_height, new_width)
         return tensor_reshaped
 
     def adapt_latent_for_VAE_decoder(self, tensor):
-        # Assume tensor shape is [batch_size, new_channel_size, 256, 16]
-        batch_size, new_stem, new_cahnnel_size, height, width = tensor.shape
-        
-        
-        # Calculate the new batch size, keeping the total amount of data constant
-        # The total number of elements is divided by the product of the old_channel_size, height, and width
-        # updated_batch_size = batch_size * (new_cahnnel_size // self.z_channels)
-        
-        # Reshape tensor to [batch_size_updated, old_channel_size, 256, 16]
-        tensor_reshaped = tensor.view(-1,  self.z_channels, height, width)
-        
-        return tensor_reshaped
+        if tensor.dim() == 4:
+            return tensor
+        if tensor.dim() != 5:
+            raise ValueError(
+                f"Expected latent tensor with 4 or 5 dimensions before VAE decode, received shape {tuple(tensor.shape)}"
+            )
+
+        if getattr(self.first_stage_model, "outputs_waveform", False):
+            return tensor
+
+        batch_size, num_stems, channel_size, height, width = tensor.shape
+        if channel_size != self.z_channels:
+            raise ValueError(
+                f"Decoder channel mismatch: received {channel_size}, expected {self.z_channels}."
+            )
+        return tensor.view(-1, self.z_channels, height, width)
 
 
     @torch.no_grad()

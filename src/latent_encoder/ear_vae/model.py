@@ -1,5 +1,4 @@
 import json
-import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,6 +6,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 import torch
 import pytorch_lightning as pl
+from huggingface_hub import HfHubHTTPError, hf_hub_download
 
 from .autoencoders import OobleckDecoder, OobleckEncoder
 
