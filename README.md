@@ -40,6 +40,7 @@ MSG-LD now ships with a dedicated multi-track dataloader for [MUSDB18-HQ](https:
 2. Update the new configuration templates to point at those folders:
 	- `config/MSG-LD/multichannel_musicldm_musdb18_train.yaml`
 	- `config/MSG-LD/multichannel_musicldm_musdb18_eval.yaml`
+	- `config/MSG-LD/multichannel_musicldm_musdb18_train_discoder.yaml` *(uses DISCoder vocoder)*
 3. Optionally adjust the `stems` list if you prepared custom subsets (defaults match the canonical four-stem layout).
 4. The datamodule re-samples the 44.1 kHz stems to the internal 16 kHz rate automatically, so no additional preprocessing is required.
 
@@ -85,6 +86,9 @@ python train_musicldm.py --config config/MSG-LD/multichannel_musicldm_slakh_3d_t
 
 # MUSDB18-HQ (new)
 python train_musicldm.py --config config/MSG-LD/multichannel_musicldm_musdb18_train.yaml
+
+# MUSDB18-HQ with DISCoder vocoder
+python train_musicldm.py --config config/MSG-LD/multichannel_musicldm_musdb18_train_discoder.yaml
 ```
 <!-- 
 # Checkpoints
