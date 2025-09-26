@@ -1,0 +1,143 @@
+project_name: "multichannel_gen_and_sep_musdb18hq_earvae"
+log_directory: "./lightning_logs"
+mode: train
+dev: False
+
+id:
+  version: "ear_vae_unconditional"
+  name: "3_D_4_stems_musdb18hq_earvae"
+
+trainer:
+  validation_every_n_steps:
+  save_checkpoint_every_n_steps:
+  save_top_k: 2
+  max_epochs: 1200
+  limit_train_batches:
+  limit_val_batches: 25
+  resume:
+  resume_from_checkpoint:
+  accelerator: gpu
+  precision: 16
+  devices:
+    - 0
+
+
+data:
+  target: src.utilities.data.datamodule.DataModuleFromConfig
+  params:
+    batch_size: 2
+    num_workers: 4
+
+    augmentation:
+      mixup: 0.0
+      return_all_wav: False
+      balanced_sampling: False
+      masking: False
+
+    path:
+      dataset_type: "MUSDB18_HQ"
+      train_data:
+        - /path/to/musdb18hq/train
+      valid_data: /path/to/musdb18hq/test
+      test_data:
+      label_data:
+      tempo_data: ""
+      tempo_map: ""
+      stems:
+        - bass
+        - drums
+        - other
+        - vocals
+      shuffle_val_test: False
+
+
+    preprocessing:
+      label:
+        norm: True
+        top_k: 527
+        quantization: False
+        threshold: 0.01
+        label_use_original_ground_truth: False
+      audio:
+        sampling_rate: 44100
+        max_wav_value: 32768.0
+        downsampling_ratio: 1024
+      stft:
+        filter_length: 2048
+        hop_length: 256
+        win_length: 2048
+      mel:
+        n_mel_channels: 128
+        mel_fmin: 0
+        mel_fmax: 22050
+        freqm: 0
+        timem: 0
+        blur: False
+        target_length: 1024
+
+model:
+  target: latent_diffusion.models.musicldm.MusicLDM
+  params:
+    num_stems: 4
+    base_learning_rate: 3.0e-05
+    batchsize: 32
+    linear_start: 0.0015
+    linear_end: 0.0195
+    num_timesteps_cond: 1
+    log_every_t: 200
+    timesteps: 1000
+    first_stage_key: waveform_stems
+    cond_stage_key: fbank
+    latent_t_size: 256
+    latent_f_size: 1
+    channels: 4
+    cond_stage_trainable: False
+    latent_mixup: 0.0
+    conditioning_key: concat
+    monitor: val/loss_simple_ema
+    scale_by_std: true
+    seperate_stem_z: False
+    use_silence_weight: False
+    tau: 2.0
+    ckpt_path:
+    unet_config:
+      target: latent_diffusion.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        image_size: 64
+        extra_film_use_concat: true
+        in_channels: 4
+        out_channels: 4
+        model_channels: 128
+        no_condition: false
+        dims: 3
+        attention_resolutions:
+          - 8
+          - 4
+          - 2
+        num_res_blocks: 2
+        channel_mult:
+          - 1
+          - 2
+          - 3
+          - 5
+        num_head_channels: 32
+        use_spatial_transformer: False
+    first_stage_config:
+      target: latent_encoder.ear_vae.model.EARVAE
+      params:
+        pretrained_name: descript/ear-vae-44khz
+        config_path:
+        checkpoint_path:
+        stems: 4
+        reduce_to_mono: true
+    cond_stage_config:
+      target: latent_diffusion.modules.encoders.modules.Patch_Cond_Model
+      params:
+        sampling_rate: 44100
+        embed_mode: fbank
+        unconditional_prob: 0.1
+
+    evaluation_params:
+      unconditional_guidance_scale: 1.0
+      ddim_sampling_steps: 200
+      n_candidates_per_samples: 1
