@@ -669,7 +669,7 @@ class DDPM(pl.LightningModule):
             self.test_data_subset_path = os.path.join(self.get_log_dir(), "target_%s" % (self.global_step))
     
             if self.test_data_subset_path is not None:
-                from audioldm_eval import EvaluationHelper
+                from audioldm_eval import EvaluationHelper  # type: ignore[import-not-found]
 
                 print(
                     "Evaluate model output based on the data savee in: %s"
@@ -1532,13 +1532,28 @@ class MusicLDM(DDPM):
         if len(mel.size()) == 4:
             mel = mel.squeeze(1)
         mel = mel.permute(0, 2, 1)
-        waveform = self.first_stage_model.vocoder(mel)
-        waveform = waveform.cpu().detach().numpy()
+
+        vocoder = getattr(self.first_stage_model, "vocoder", None)
+        if vocoder is None:
+            raise RuntimeError("No vocoder is attached to the first stage model.")
+
+        vocoder_device = getattr(vocoder, "device", None)
+        if vocoder_device is None:
+            try:
+                vocoder_device = next(vocoder.parameters()).device  # type: ignore[arg-type]
+            except (StopIteration, AttributeError):
+                vocoder_device = mel.device
+
+        mel = mel.to(vocoder_device)
+        waveform = vocoder(mel)
+        waveform = waveform.to(mel.device) if isinstance(waveform, torch.Tensor) else waveform
+        waveform = waveform.detach().cpu().numpy()
         if save:
             self.save_waveform(waveform, savepath, name)
         return waveform
 
     def save_waveform(self, waveform, savepath, name="outwav"):
+        sample_rate = getattr(self.first_stage_model, "target_sample_rate", 16000)
         for i in range(waveform.shape[0]):
             if type(name) is str:
                 path = os.path.join(
@@ -1556,7 +1571,7 @@ class MusicLDM(DDPM):
                 )
             else:
                 raise NotImplementedError
-            sf.write(path, waveform[i, 0], samplerate=16000)
+            sf.write(path, waveform[i, 0], samplerate=sample_rate)
 
     @torch.no_grad()
     def encode_first_stage(self, x):
@@ -1625,8 +1640,8 @@ class MusicLDM(DDPM):
 
     def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
         def rescale_bbox(bbox):
-            x0 = clamp((bbox[0] - crop_coordinates[0]) / crop_coordinates[2])
-            y0 = clamp((bbox[1] - crop_coordinates[1]) / crop_coordinates[3])
+            x0 = max(0.0, min(1.0, (bbox[0] - crop_coordinates[0]) / crop_coordinates[2]))
+            y0 = max(0.0, min(1.0, (bbox[1] - crop_coordinates[1]) / crop_coordinates[3]))
             w = min(bbox[2] / crop_coordinates[2], 1 - x0)
             h = min(bbox[3] / crop_coordinates[3], 1 - y0)
             return x0, y0, w, h
@@ -1841,7 +1856,6 @@ class MusicLDM(DDPM):
         )
         if return_codebook_ids:
             raise DeprecationWarning("Support dropped.")
-            model_mean, _, model_log_variance, logits = outputs
         elif return_x0:
             model_mean, _, model_log_variance, x0 = outputs
         else:
@@ -1855,10 +1869,6 @@ class MusicLDM(DDPM):
             (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1))).contiguous()
         )
 
-        if return_codebook_ids:
-            return model_mean + nonzero_mask * (
-                0.5 * model_log_variance
-            ).exp() * noise, logits.argmax(dim=1)
         if return_x0:
             return (
                 model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise,
@@ -3255,12 +3265,13 @@ class CLAPResidualVQWrapper(pl.LightningModule):
 
 if __name__ == "__main__":
     import yaml
+    from latent_diffusion.models.latent_diffusion import LatentDiffusion  # type: ignore[import-not-found]
 
     model_config = "/mnt/fast/nobackup/users/hl01486/projects/general_audio_generation/stable-diffusion/models/ldm/text2img256/config.yaml"
     model_config = yaml.load(open(model_config, "r"), Loader=yaml.FullLoader)
 
     latent_diffusion = LatentDiffusion(**model_config["model"]["params"])
 
-    import ipdb
+    import ipdb  # type: ignore[import-not-found]
 
     ipdb.set_trace()

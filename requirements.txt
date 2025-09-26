@@ -34,3 +34,6 @@ vector-quantize-pytorch
 wandb
 webdataset
 wget
+huggingface_hub
+descript-audio-codec
+pytest

@@ -43,6 +43,27 @@ MSG-LD now ships with a dedicated multi-track dataloader for [MUSDB18-HQ](https:
 3. Optionally adjust the `stems` list if you prepared custom subsets (defaults match the canonical four-stem layout).
 4. The datamodule re-samples the 44.1 kHz stems to the internal 16 kHz rate automatically, so no additional preprocessing is required.
 
+## Vocoder options
+
+The first-stage autoencoder now supports both HiFi-GAN and the DISCoder vocoder. HiFi-GAN remains the default, but you can opt into DISCoder by extending the `ddconfig` block:
+
+```yaml
+first_stage_config:
+	params:
+		ddconfig:
+			# existing settings …
+			hifigan_ckpt: lightning_logs/musicldm_checkpoints/hifigan-ckpt.ckpt
+			vocoder:
+				type: discoder
+				repo_id: disco-eth/discoder        # use checkpoint/config paths for offline runs
+				revision: main
+				target_sample_rate: 16000          # resample DISCoder output to match the training rate
+```
+
+> **Note:** DISCoder expects 128-bin mel spectrograms and natively operates at 44.1 kHz. The wrapper bundled with MSG-LD automatically interpolates 64-bin mels and rescales the decoded audio back to `target_sample_rate`, so you can reuse existing checkpoints without retraining.
+
+If you prefer working offline, replace `repo_id`/`revision` with local `checkpoint_path` and `config_path` entries. Make sure you install the additional dependencies listed in the updated `requirements.txt` (`huggingface_hub`, `descript-audio-codec`, and the DISCoder repository).
+
 # Training MSG-LD
 
 After data and conda evn are intalled properlly, you will need to dowload components of MusicLDM that are used for MSG-LD too. For this please 

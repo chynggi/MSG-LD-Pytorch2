@@ -7,7 +7,7 @@ from contextlib import contextmanager
 import numpy as np
 from latent_diffusion.modules.ema import *
 
-from taming.modules.vqvae.quantize import VectorQuantizer as VectorQuantizer
+from taming.modules.vqvae.quantize import VectorQuantizer as VectorQuantizer  # type: ignore[import-not-found]
 from torch.optim.lr_scheduler import LambdaLR
 from latent_diffusion.modules.diffusionmodules.model import Encoder, Decoder
 from latent_diffusion.modules.distributions.distributions import (
@@ -438,14 +438,46 @@ class AutoencoderKL(pl.LightningModule):
         else:
             print("Train from scratch")
 
+        self.target_sample_rate = ddconfig.get("target_sample_rate", 16000)
+        self.vocoder = None
+        self.vocoder_type = None
+        self.vocoder_expected_mel_bins = mel_num
+
         if self.image_key == "fbank":
-            # self.vocoder = None
             chkpt = ddconfig.get("hifigan_ckpt", None)
+            vocoder_cfg = ddconfig.get("vocoder", {}) or {}
+
+            mel_bins = mel_num
             if config is not None:
-                self.vocoder = get_vocoder(None, "cpu", config["preprocessing"]["mel"]["n_mel_channels"], ckpt_path = chkpt)  # TODO fixed parameter here
-            else:
-                print("Mel Num:", mel_num)
-                self.vocoder = get_vocoder(None, "cpu", mel_num, ckpt_path = chkpt)  # TODO fixed parameter here
+                try:
+                    mel_bins = config["preprocessing"]["mel"]["n_mel_channels"]
+                except Exception:
+                    mel_bins = mel_num
+            print("Mel Num:", mel_bins)
+
+            vocoder_device = vocoder_cfg.get(
+                "device", "cuda" if torch.cuda.is_available() else "cpu"
+            )
+
+            self.vocoder = get_vocoder(
+                config,
+                vocoder_device,
+                mel_bins,
+                ckpt_path=chkpt,
+                vocoder_config=vocoder_cfg,
+            )
+
+            self.vocoder_expected_mel_bins = getattr(
+                self.vocoder, "expected_mel_bins", mel_bins
+            )
+            self.vocoder_type = getattr(
+                self.vocoder, "vocoder_type", vocoder_cfg.get("type", "hifigan")
+            )
+            self.target_sample_rate = getattr(
+                self.vocoder,
+                "target_sample_rate",
+                vocoder_cfg.get("target_sample_rate", self.target_sample_rate),
+            )
         elif self.image_key == "stft":
             self.wave_decoder = Generator(input_channel=512)
             self.wave_decoder.train()
