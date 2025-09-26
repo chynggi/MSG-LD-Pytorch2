@@ -17,7 +17,7 @@ trainer:
   resume:
   resume_from_checkpoint:
   accelerator: gpu
-  precision: 32
+  precision: 16
   devices:
     - 0
 
@@ -79,7 +79,7 @@ model:
   params:
     num_stems: 4
     base_learning_rate: 3.0e-05
-    batchsize: 45
+    batchsize: 16
     linear_start: 0.0015
     linear_end: 0.0195
     num_timesteps_cond: 1
