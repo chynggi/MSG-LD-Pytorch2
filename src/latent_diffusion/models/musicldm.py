@@ -70,6 +70,41 @@ def uniform_on_device(r1, r2, shape, device):
     return (r1 - r2) * torch.rand(*shape, device=device) + r2
 
 
+class GroupedDiagonalGaussianDistribution(DiagonalGaussianDistribution):
+    """Wrap a diagonal Gaussian posterior grouped by channel axis."""
+
+    def __init__(self, parameters: torch.Tensor, channels_per_example: int):
+        super().__init__(parameters)
+        if channels_per_example < 1:
+            raise ValueError("channels_per_example must be >= 1")
+        if parameters.shape[0] % channels_per_example != 0:
+            raise ValueError(
+                "Batch dimension must be divisible by channels_per_example to regroup latents."
+            )
+        self._channels_per_example = channels_per_example
+        self._original_batch = parameters.shape[0] // channels_per_example
+
+    def sample(self):
+        samples = super().sample()
+        if self._channels_per_example == 1:
+            return samples
+        return samples.view(
+            self._original_batch,
+            self._channels_per_example,
+            *samples.shape[1:],
+        )
+
+    def mode(self):
+        modes = super().mode()
+        if self._channels_per_example == 1:
+            return modes
+        return modes.view(
+            self._original_batch,
+            self._channels_per_example,
+            *modes.shape[1:],
+        )
+
+
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
     def __init__(
@@ -492,23 +527,21 @@ class DDPM(pl.LightningModule):
         else:
             x = batch[k].to(memory_format=torch.contiguous_format).float()
 
-            # ✅ MUSDB18-HQ stems (batch, 4, samples) 허용
-            if x.dim() == 3 and x.shape[1] == 4:
+            if x.dim() == 3:
+                channels = x.shape[1]
+                if hasattr(self, "num_stems") and self.num_stems not in (0, channels):
+                    if self.num_stems != channels:
+                        raise ValueError(
+                            f"Input has {channels} channels but model expects {self.num_stems} stems."
+                        )
                 return x
 
-            # 🚨 만약 mix (batch, 2, samples)가 들어오면 에러 발생시켜서 디버깅
-            if x.dim() == 3 and x.shape[1] == 2:
-                raise ValueError(
-                    f"Stereo mix (batch, 2, samples) detected at get_input. "
-                    f"Please modify DataLoader to return stems (batch, 4, samples). "
-                    f"Current shape: {x.shape}"
-                )
-
-            # (batch, samples)도 허용 (mono waveform)
             if x.dim() == 2:
                 return x
 
-            raise ValueError(f"Unexpected input shape {x.shape}, expected (batch, 4, samples) for stems.")
+            raise ValueError(
+                f"Unexpected input shape {tuple(x.shape)}. Expected (batch, samples) or (batch, stems, samples)."
+            )
 
         
     def shared_step(self, batch):
@@ -1022,6 +1055,8 @@ class MusicLDM(DDPM):
 
             if self.first_stage_key == "fbank_stems":
                 encoder_inputs = self.adapt_fbank_for_VAE_encoder(x)
+            elif self.first_stage_key == "waveform_stems":
+                encoder_inputs = self.adapt_waveform_for_VAE_encoder(x)
             else:
                 encoder_inputs = x
 
@@ -1279,6 +1314,51 @@ class MusicLDM(DDPM):
 
         return tensor_reshaped
 
+    def adapt_waveform_for_VAE_encoder(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Reshape multi-stem waveform batches to match the VAE encoder contract.
+
+        Accepts common layouts such as `(batch, stems, samples)`, `(batch, stems, 1, samples)`,
+        or `(batch, 1, stems, samples)` and returns a contiguous tensor of shape
+        `(batch * stems, 1, 1, samples)` suitable for ``Conv2d`` front-ends expecting
+        a single-channel input.
+        """
+
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError(
+                f"Expected waveform tensor input, received {type(tensor).__name__}."
+            )
+
+        original_shape = tensor.shape
+
+        # Collapse optional singleton channel axes introduced upstream.
+        if tensor.dim() == 5 and tensor.shape[1] == 1:
+            tensor = tensor[:, 0]
+
+        if tensor.dim() == 4:
+            if tensor.shape[1] == 1 and tensor.shape[2] == self.num_stems:
+                # (batch, 1, stems, samples)
+                tensor = tensor[:, 0]
+            elif tensor.shape[2] == 1:
+                # (batch, stems, 1, samples)
+                tensor = tensor.squeeze(2)
+
+        if tensor.dim() != 3:
+            raise ValueError(
+                "Waveform tensor must be convertible to (batch, stems, samples); "
+                f"received shape {original_shape}."
+            )
+
+        batch_size, num_stems, num_samples = tensor.shape
+
+        if getattr(self, "num_stems", None) not in (None, 0):
+            if num_stems != self.num_stems:
+                raise ValueError(
+                    f"Waveform tensor stems ({num_stems}) do not match model expectation ({self.num_stems})."
+                )
+
+        tensor = tensor.view(batch_size * num_stems, 1, 1, num_samples)
+        return tensor.contiguous()
+
     def adapt_latent_for_LDM(self, tensor):
         if tensor.dim() == 5:
             return tensor
@@ -1347,11 +1427,38 @@ class MusicLDM(DDPM):
             x2 = x2[select_idx]
 
             if return_first_stage_encode:
-                encoder_posterior = self.encode_first_stage(x1)
+                if k == "fbank_stems":
+                    encoder_posterior = self.encode_first_stage(
+                        self.adapt_fbank_for_VAE_encoder(x1)
+                    )
+                elif k == "waveform_stems":
+                    encoder_posterior = self.encode_first_stage(
+                        self.adapt_waveform_for_VAE_encoder(x1)
+                    )
+                else:
+                    encoder_posterior = self.encode_first_stage(x1)
                 z1 = self.get_first_stage_encoding(encoder_posterior).detach()
-                encoder_posterior = self.encode_first_stage(x2)
+                if k == "fbank_stems":
+                    encoder_posterior = self.encode_first_stage(
+                        self.adapt_fbank_for_VAE_encoder(x2)
+                    )
+                elif k == "waveform_stems":
+                    encoder_posterior = self.encode_first_stage(
+                        self.adapt_waveform_for_VAE_encoder(x2)
+                    )
+                else:
+                    encoder_posterior = self.encode_first_stage(x2)
                 z2 = self.get_first_stage_encoding(encoder_posterior).detach()
-                encoder_posterior = self.encode_first_stage(x)
+                if k == "fbank_stems":
+                    encoder_posterior = self.encode_first_stage(
+                        self.adapt_fbank_for_VAE_encoder(x)
+                    )
+                elif k == "waveform_stems":
+                    encoder_posterior = self.encode_first_stage(
+                        self.adapt_waveform_for_VAE_encoder(x)
+                    )
+                else:
+                    encoder_posterior = self.encode_first_stage(x)
                 z = self.get_first_stage_encoding(encoder_posterior).detach()
                 p = torch.from_numpy(np.random.beta(5,5, x1.size(0)))
                 p = p[:,None,None,None].to(self.device)
@@ -1414,10 +1521,10 @@ class MusicLDM(DDPM):
                     z = self.get_first_stage_encoding(encoder_posterior).detach()
 
                 elif k == "waveform_stems":
-                    encoder_posterior = self.encode_first_stage(x)
+                    waveform_inputs = self.adapt_waveform_for_VAE_encoder(x)
+                    encoder_posterior = self.encode_first_stage(waveform_inputs)
                     z = self.get_first_stage_encoding(encoder_posterior).detach()
-                    if z.dim() == 4:
-                        z = z.view(-1, self.num_stems, self.z_channels, z.shape[-2], z.shape[-1])
+                    z = self.adapt_latent_for_LDM(z)
 
                 else:
                     raise NotImplementedError
@@ -1669,6 +1776,23 @@ class MusicLDM(DDPM):
 
     @torch.no_grad()
     def encode_first_stage(self, x):
+        channel_groups = None
+        original_batch = None
+        expected_in = getattr(getattr(self.first_stage_model, "encoder", None), "in_channels", None)
+        if (
+            isinstance(x, torch.Tensor)
+            and expected_in is not None
+            and x.dim() >= 4
+            and x.shape[1] != expected_in
+        ):
+            if x.shape[1] % expected_in != 0:
+                raise ValueError(
+                    f"Input channel count {x.shape[1]} is not divisible by encoder in_channels {expected_in}."
+                )
+            channel_groups = x.shape[1] // expected_in
+            original_batch = x.shape[0]
+            x = x.reshape(original_batch * channel_groups, expected_in, *x.shape[2:])
+
         if hasattr(self, "split_input_params"):
             if self.split_input_params["patch_distributed_vq"]:
                 ks = self.split_input_params["ks"]  # eg. (128, 128)
@@ -1706,12 +1830,23 @@ class MusicLDM(DDPM):
                 # stitch crops together
                 decoded = fold(o)
                 decoded = decoded / normalization
-                return decoded
+                posterior = decoded
 
             else:
-                return self.first_stage_model.encode(x)
+                posterior = self.first_stage_model.encode(x)
         else:
-            return self.first_stage_model.encode(x)
+            posterior = self.first_stage_model.encode(x)
+
+        if channel_groups is None:
+            return posterior
+
+        if isinstance(posterior, DiagonalGaussianDistribution):
+            return GroupedDiagonalGaussianDistribution(posterior.parameters, channel_groups)
+        if isinstance(posterior, torch.Tensor):
+            return posterior.view(original_batch, channel_groups, *posterior.shape[1:])
+        raise NotImplementedError(
+            f"Unsupported posterior type {type(posterior)} for grouped encoding."
+        )
 
     def shared_step(self, batch, **kwargs):
         x, c = self.get_input(batch, self.first_stage_key)

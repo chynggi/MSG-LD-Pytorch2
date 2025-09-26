@@ -7,6 +7,9 @@ from einops import rearrange
 
 from latent_diffusion.util import instantiate_from_config
 from latent_diffusion.modules.attention import LinearAttention
+from latent_diffusion.modules.distributions.distributions import (
+    DiagonalGaussianDistribution,
+)
 
 
 def get_timestep_embedding(timesteps, embedding_dim):
@@ -39,6 +42,37 @@ def Normalize(in_channels, num_groups=32):
     return torch.nn.GroupNorm(
         num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True
     )
+
+
+def _ensure_channel_count(x: torch.Tensor, target_channels: int) -> torch.Tensor:
+    """Match tensor channel count to target by simple averaging/repetition.
+
+    If more channels than desired are provided (e.g. stereo input into a mono
+    model) we average across the channel dimension to produce a mono signal and
+    replicate it when the model expects multiple identical channels. When fewer
+    channels are provided, we repeat the available data to reach the requested
+    width. This keeps the downstream convolutional layers from raising shape
+    errors while preserving energy as much as possible.
+    """
+
+    if target_channels is None:
+        return x
+
+    current_channels = x.shape[1]
+    if current_channels == target_channels:
+        return x
+
+    if current_channels > target_channels:
+        mono = x.mean(dim=1, keepdim=True)
+        if target_channels == 1:
+            return mono
+        repeat_factor = target_channels
+        return mono.repeat(1, repeat_factor, 1, 1)
+
+    # current_channels < target_channels: repeat available data
+    repeat_factor = math.ceil(target_channels / current_channels)
+    expanded = x.repeat(1, repeat_factor, 1, 1)
+    return expanded[:, :target_channels]
 
 
 class Upsample(nn.Module):
@@ -365,6 +399,14 @@ class Model(nn.Module):
 
     def forward(self, x, t=None, context=None):
         # assert x.shape[2] == x.shape[3] == self.resolution
+        context_channels = context.shape[1] if context is not None else 0
+        expected_x_channels = self.in_channels - context_channels
+        if expected_x_channels <= 0:
+            raise ValueError(
+                "Expected input channels derived from configuration to be positive,"
+                f" got {expected_x_channels}."
+            )
+        x = _ensure_channel_count(x, expected_x_channels)
         if context is not None:
             # assume aligned context, cat along channel axis
             x = torch.cat((x, context), dim=1)
@@ -519,6 +561,7 @@ class Encoder(nn.Module):
     def forward(self, x):
         # timestep embedding
         temb = None
+        x = _ensure_channel_count(x, self.in_channels)
         # downsampling
         hs = [self.conv_in(x)]
         for i_level in range(self.num_resolutions):
