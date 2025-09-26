@@ -472,25 +472,48 @@ class Patch_Cond_Model(nn.Module):
             return False
 
     def forward(self, batch):
-        # First process x with SubModel1
-        encoder_posterior = self.encode_first_stage(batch)
+        if isinstance(batch, torch.Tensor):
+            audio = batch
+        else:
+            audio = torch.as_tensor(batch)
+
+        if audio.dim() == 2:
+            audio = audio.unsqueeze(1)
+        elif audio.dim() != 3:
+            raise ValueError(
+                f"Patch_Cond_Model expected conditioning audio with shape (batch, stems, samples) but received {tuple(audio.shape)}."
+            )
+
+        target_stems = self.num_stems or audio.shape[1]
+        if audio.shape[1] != target_stems:
+            if audio.shape[1] == 1:
+                audio = audio.repeat(1, target_stems, 1)
+            else:
+                raise ValueError(
+                    f"Patch_Cond_Model expected {target_stems} stems but received {audio.shape[1]}."
+                )
+
+        device = self.device() if callable(self.device) else self.device
+        audio = audio.to(device=device, dtype=torch.float32)
+
+        encoder_posterior = self.encode_first_stage(audio)
         embed = self.get_first_stage_encoding(encoder_posterior).detach()
 
-        # Initialize a tensor to store the expanded embeddings
-        expanded_embed = torch.zeros(embed.size(0), self.num_stems, *embed.shape[1:], device=embed.device)
+        if embed.dim() == 4:
+            embed = embed.unsqueeze(1)
+        if embed.shape[1] != 1:
+            embed = embed.mean(dim=1, keepdim=True)
 
-        for i in range(embed.size(0)):
-            # Optionally modify embed[i] based on a decision
-            if self.make_decision(self.unconditional_prob):
-                modified_embed = self.unconditional_token
-            else:
-                modified_embed = embed[i]
+        expanded_embed = embed.repeat(1, target_stems, 1, 1, 1).clone()
+        unconditional_token = (
+            self.unconditional_token.to(device).expand(target_stems, -1, -1, -1)
+        )
 
-            # Assuming you want to replicate the modified embed to fill all stems
-            expanded_embed[i] = modified_embed.repeat(self.num_stems, 1, 1, 1)
+        if self.unconditional_prob > 0:
+            for i in range(expanded_embed.size(0)):
+                if self.make_decision(self.unconditional_prob):
+                    expanded_embed[i] = unconditional_token
 
-        # embed = embed.unsqueeze(1)
-        # [bs, 1, 8, 256, 16]
         return expanded_embed.detach()
 
         

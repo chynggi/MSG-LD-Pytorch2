@@ -1,11 +1,11 @@
-project_name: "multichannel_gen_and_sep_musdb18hq_earvae"
+project_name: "multichannel_gen_and_sep_musdb18hq_3.0.2"
 log_directory: "./lightning_logs"
 mode: train
 dev: False
 
 id:
-  version: "ear_vae_unconditional"
-  name: "3_D_4_stems_musdb18hq_earvae"
+  version: "zero_unconditional"
+  name: "3_D_4_stems_musdb18hq"
 
 trainer:
   validation_every_n_steps:
@@ -25,8 +25,8 @@ trainer:
 data:
   target: src.utilities.data.datamodule.DataModuleFromConfig
   params:
-    batch_size: 1
-    num_workers: 0
+    batch_size: 4
+    num_workers: 4
 
     augmentation:
       mixup: 0.0
@@ -37,8 +37,8 @@ data:
     path:
       dataset_type: "MUSDB18_HQ"
       train_data:
-        - /workspace/musdb18hq/train
-      valid_data: /workspace/musdb18hq/test
+        - /path/to/musdb18hq/train
+      valid_data: /path/to/musdb18hq/test
       test_data:
       label_data:
       tempo_data: ""
@@ -59,17 +59,16 @@ data:
         threshold: 0.01
         label_use_original_ground_truth: False
       audio:
-        sampling_rate: 44100
+        sampling_rate: 16000
         max_wav_value: 32768.0
-        downsampling_ratio: 1024
       stft:
-        filter_length: 2048
-        hop_length: 256
-        win_length: 2048
+        filter_length: 1024
+        hop_length: 160
+        win_length: 1024
       mel:
-        n_mel_channels: 128
+        n_mel_channels: 64
         mel_fmin: 0
-        mel_fmax: 22050
+        mel_fmax: 8000
         freqm: 0
         timem: 0
         blur: False
@@ -80,16 +79,16 @@ model:
   params:
     num_stems: 4
     base_learning_rate: 3.0e-05
-    batchsize: 8
+    batchsize: 45
     linear_start: 0.0015
     linear_end: 0.0195
     num_timesteps_cond: 1
     log_every_t: 200
     timesteps: 1000
-    first_stage_key: "waveform_stems"
-    cond_stage_key: waveform
-    latent_t_size: 512
-    latent_f_size: 1
+    first_stage_key: fbank_stems
+    cond_stage_key: fbank
+    latent_t_size: 256
+    latent_f_size: 16
     channels: 4
     cond_stage_trainable: False
     latent_mixup: 0.0
@@ -123,17 +122,49 @@ model:
         num_head_channels: 32
         use_spatial_transformer: False
     first_stage_config:
-      target: latent_encoder.ear_vae.model.EARVAE
+      base_learning_rate: 4.5e-05
+      target: latent_encoder.autoencoder.AutoencoderKL
       params:
-        pretrained_name: earlab/EAR_VAE
-        config_path:
-        checkpoint_path:
-        stems: 4
-        reduce_to_mono: true
+        reload_from_ckpt: lightning_logs/musicldm_checkpoints/vae-ckpt.ckpt
+        batchsize: 4
+        monitor: val/rec_loss
+        image_key: fbank
+        subband: 1
+        embed_dim: 8
+        time_shuffle: 1
+        mel_num: 64
+        vocoder:
+          type: discoder
+          device: auto
+          sample_rate: 16000
+          target_sample_rate: 44100
+        lossconfig:
+          target: latent_diffusion.modules.losses.LPIPSWithDiscriminator
+          params:
+            disc_start: 50001
+            kl_weight: 1.0
+            disc_weight: 0.5
+            disc_in_channels: 1
+        ddconfig:
+          double_z: true
+          hifigan_ckpt: lightning_logs/musicldm_checkpoints/hifigan-ckpt.ckpt
+          z_channels: 8
+          resolution: 256
+          downsample_time: false
+          in_channels: 1
+          out_ch: 1
+          ch: 128
+          ch_mult:
+            - 1
+            - 2
+            - 4
+          num_res_blocks: 2
+          attn_resolutions: []
+          dropout: 0.0
     cond_stage_config:
       target: latent_diffusion.modules.encoders.modules.Patch_Cond_Model
       params:
-        sampling_rate: 44100
+        sampling_rate: 16000
         embed_mode: fbank
         unconditional_prob: 0.1
 

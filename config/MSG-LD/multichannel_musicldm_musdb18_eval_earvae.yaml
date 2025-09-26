@@ -37,8 +37,8 @@ data:
     path:
       dataset_type: "MUSDB18_HQ"
       train_data:
-        - /path/to/musdb18hq/train
-      valid_data: /path/to/musdb18hq/test
+        - /workspace/musdb18hq/train
+      valid_data: /workspace/musdb18hq/test
       test_data:
       label_data:
       tempo_data: ""
@@ -80,7 +80,7 @@ model:
   params:
     num_stems: 4
     base_learning_rate: 3.0e-05
-    batchsize: 32
+    batchsize: 8
     linear_start: 0.0015
     linear_end: 0.0195
     num_timesteps_cond: 1

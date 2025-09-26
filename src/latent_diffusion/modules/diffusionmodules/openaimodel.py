@@ -114,9 +114,12 @@ class Upsample(nn.Module):
     def forward(self, x):
         assert x.shape[1] == self.channels
         if self.dims == 3:
-            x = F.interpolate(
-                x, (x.shape[2], x.shape[3] * 2, x.shape[4] * 2), mode="nearest"
-            )
+            depth = x.shape[2]
+            height = x.shape[3] * 2
+            width = x.shape[4]
+            if width > 1:
+                width = width * 2
+            x = F.interpolate(x, (depth, height, width), mode="nearest")
         else:
             x = F.interpolate(x, scale_factor=2, mode="nearest")
         if self.use_conv:
@@ -171,6 +174,30 @@ class Downsample(nn.Module):
 
     def forward(self, x):
         assert x.shape[1] == self.channels
+        if not self.use_conv and self.dims == 3:
+            # AvgPool3d expects the input spatial dimensions to be at least as
+            # large as the kernel. For εar-VAE latents the final frequency axis
+            # can collapse to width=1, which would otherwise raise a runtime
+            # error when pooling with kernel (1, 2, 2). In that case we fall
+            # back to a stride that preserves the narrow axis.
+            width = x.shape[-1]
+            kernel_size = self.op.kernel_size
+            stride = self.op.stride
+
+            if isinstance(kernel_size, int):
+                kernel_size = (kernel_size,) * 3
+            if isinstance(stride, int):
+                stride = (stride,) * 3
+
+            if width < kernel_size[-1]:
+                adjusted_kernel = (kernel_size[0], kernel_size[1], max(1, width))
+                adjusted_stride = (stride[0], stride[1], 1)
+                return F.avg_pool3d(
+                    x,
+                    kernel_size=adjusted_kernel,
+                    stride=adjusted_stride,
+                )
+
         return self.op(x)
 
 

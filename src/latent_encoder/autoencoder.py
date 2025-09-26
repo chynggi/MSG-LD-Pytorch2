@@ -5,7 +5,7 @@ import pytorch_lightning as pl
 import torch.nn.functional as F
 from contextlib import contextmanager
 import numpy as np
-from typing import Optional
+from typing import Optional, Any, Dict
 from latent_diffusion.modules.ema import *
 
 from taming.modules.vqvae.quantize import VectorQuantizer as VectorQuantizer
@@ -386,9 +386,19 @@ class AutoencoderKL(pl.LightningModule):
 
         self.config = config
         self.image_key = image_key
-        self.vocoder_settings = vocoder or {}
+        if vocoder is None:
+            self.vocoder_settings: Dict[str, Any] = {}
+        else:
+            try:
+                self.vocoder_settings = dict(vocoder)
+            except TypeError:
+                self.vocoder_settings = vocoder
         self.vocoder_type = self.vocoder_settings.get("type", "hifigan").lower()
         self.vocoder_sample_rate: Optional[int] = None
+        self.vocoder_target_sample_rate: Optional[int] = self.vocoder_settings.get(
+            "target_sample_rate"
+        )
+        self.output_sample_rate: Optional[int] = None
 
         self.encoder = Encoder(**ddconfig)
         self.decoder = Decoder(**ddconfig)
@@ -445,7 +455,10 @@ class AutoencoderKL(pl.LightningModule):
 
         if self.image_key == "fbank":
             chkpt = ddconfig.get("hifigan_ckpt", None)
-            vocoder_device = self.vocoder_settings.get("device", "cpu")
+            vocoder_device_pref = self.vocoder_settings.get("device", "cpu")
+            if isinstance(vocoder_device_pref, str) and vocoder_device_pref.lower() == "auto":
+                vocoder_device_pref = "cuda" if torch.cuda.is_available() else "cpu"
+            self.vocoder_device = vocoder_device_pref
             if "mel_bins" in self.vocoder_settings:
                 mel_bins = self.vocoder_settings["mel_bins"]
             elif config is not None:
@@ -455,16 +468,35 @@ class AutoencoderKL(pl.LightningModule):
 
             self.vocoder = get_vocoder(
                 config,
-                vocoder_device,
+                self.vocoder_device,
                 mel_bins,
                 ckpt_path=chkpt,
                 vocoder_config=self.vocoder_settings,
             )
             self.vocoder_type = getattr(self.vocoder, "_vocoder_type", self.vocoder_type)
             self.vocoder_sample_rate = getattr(self.vocoder, "_sample_rate", None)
+            if self.vocoder_target_sample_rate is None:
+                self.vocoder_target_sample_rate = getattr(
+                    self.vocoder, "_target_sample_rate", None
+                )
+            else:
+                setattr(self.vocoder, "_target_sample_rate", self.vocoder_target_sample_rate)
         elif self.image_key == "stft":
             self.wave_decoder = Generator(input_channel=512)
             self.wave_decoder.train()
+
+        if self.output_sample_rate is None:
+            candidates = [
+                self.vocoder_target_sample_rate,
+                self.vocoder_sample_rate,
+                self.vocoder_settings.get("sample_rate"),
+                self._infer_training_sample_rate(),
+                16000,
+            ]
+            for candidate in candidates:
+                if candidate:
+                    self.output_sample_rate = int(candidate)
+                    break
 
     def get_device(self):
         return self.device
@@ -519,6 +551,7 @@ class AutoencoderKL(pl.LightningModule):
                 dec,
                 self.vocoder,
                 vocoder_type=self.vocoder_type,
+                target_sample_rate=self.output_sample_rate,
             )
         elif self.image_key == "stft":
             dec = dec.squeeze(1).permute(0, 2, 1)
@@ -808,7 +841,7 @@ class AutoencoderKL(pl.LightningModule):
         )
 
     def save_wave(self, batch_wav, fname):
-        sample_rate = self.vocoder_sample_rate or 16000
+        sample_rate = self.output_sample_rate or self.vocoder_sample_rate or 16000
         for wav, name in zip(batch_wav, fname):
             sf.write(name, wav, samplerate=sample_rate)
 
@@ -838,6 +871,14 @@ class AutoencoderKL(pl.LightningModule):
 
     def get_last_layer(self):
         return self.decoder.conv_out.weight
+
+    def _infer_training_sample_rate(self) -> Optional[int]:
+        if self.config is None:
+            return None
+        try:
+            return int(self.config["preprocessing"]["audio"]["sampling_rate"])
+        except (KeyError, TypeError, ValueError):
+            return None
 
     @torch.no_grad()
     def log_images(self, batch, train=True, only_inputs=False, waveform=None, **kwargs):

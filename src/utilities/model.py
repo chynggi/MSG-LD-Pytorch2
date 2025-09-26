@@ -3,6 +3,7 @@ import json
 
 import torch
 import numpy as np
+import resampy
 
 from typing import Any, Dict, Optional
 
@@ -60,6 +61,7 @@ def get_vocoder(
     vocoder_cfg = vocoder_config or {}
     vocoder_type = vocoder_cfg.get("type", "hifigan").lower()
     sample_rate = _infer_sample_rate(vocoder_cfg, config)
+    target_sample_rate = vocoder_cfg.get("target_sample_rate")
     device_obj = torch.device(device)
 
     if vocoder_type == "discoder":
@@ -91,6 +93,8 @@ def get_vocoder(
         if sample_rate is None:
             sample_rate = model.config.get("sample_rate")
         setattr(model, "_sample_rate", sample_rate)
+        if target_sample_rate is not None:
+            setattr(model, "_target_sample_rate", target_sample_rate)
         return model
 
     # Default to HiFi-GAN
@@ -122,6 +126,8 @@ def get_vocoder(
     vocoder.to(device_obj)
     setattr(vocoder, "_vocoder_type", "hifigan")
     setattr(vocoder, "_sample_rate", sample_rate or default_config.get("sampling_rate", 16000))
+    if target_sample_rate is not None:
+        setattr(vocoder, "_target_sample_rate", target_sample_rate)
     return vocoder
 
 
@@ -140,7 +146,37 @@ def _infer_vocoder_type(vocoder: Any, explicit: Optional[str]) -> str:
     return vocoder.__class__.__name__.lower()
 
 
-def vocoder_infer(mels, vocoder, *_, lengths=None, vocoder_type=None):
+def _resample_batch(wavs: np.ndarray, native_rate: int, target_rate: int) -> np.ndarray:
+    if wavs.ndim == 1:
+        wavs = wavs[None, :]
+    dtype = wavs.dtype
+    resampled = []
+    for wav in wavs:
+        if dtype == np.int16:
+            wav_float = wav.astype(np.float32) / 32768.0
+        else:
+            wav_float = wav.astype(np.float32)
+        res = resampy.resample(wav_float, native_rate, target_rate)
+        if dtype == np.int16:
+            res = np.clip(res * 32768.0, -32768, 32767).astype(np.int16)
+        else:
+            res = res.astype(np.float32)
+        resampled.append(res)
+
+    max_len = max(x.shape[-1] for x in resampled)
+    if any(x.shape[-1] != max_len for x in resampled):
+        pad_value = 0 if dtype == np.int16 else 0.0
+        padded = []
+        for arr in resampled:
+            if arr.shape[-1] < max_len:
+                arr = np.pad(arr, (0, max_len - arr.shape[-1]), mode="constant", constant_values=pad_value)
+            padded.append(arr)
+        resampled = padded
+
+    return np.stack(resampled, axis=0)
+
+
+def vocoder_infer(mels, vocoder, *_, lengths=None, vocoder_type=None, target_sample_rate=None):
     device = next(vocoder.parameters()).device if hasattr(vocoder, "parameters") else torch.device("cpu")
     mels_tensor = _ensure_tensor(mels, device)
     if mels_tensor.dim() == 2:
@@ -149,6 +185,8 @@ def vocoder_infer(mels, vocoder, *_, lengths=None, vocoder_type=None):
         mels_tensor = mels_tensor.transpose(1, 2)
 
     inferred_type = _infer_vocoder_type(vocoder, vocoder_type)
+    native_rate = getattr(vocoder, "_sample_rate", None)
+    target_sample_rate = target_sample_rate or getattr(vocoder, "_target_sample_rate", None)
 
     with torch.no_grad():
         wavs = vocoder(mels_tensor).squeeze(1)
@@ -158,8 +196,18 @@ def vocoder_infer(mels, vocoder, *_, lengths=None, vocoder_type=None):
     if lengths is not None:
         wavs = torch.stack([w[..., :int(l)] for w, l in zip(wavs, lengths)])
 
-    if inferred_type == "discoder":
-        return wavs.numpy().astype("float32")
+    wavs_np = wavs.numpy()
 
-    scaled = (wavs.numpy() * 32768).astype("int16")
-    return scaled
+    if inferred_type == "discoder":
+        output = wavs_np.astype("float32")
+    else:
+        output = (wavs_np * 32768).astype("int16")
+
+    if (
+        target_sample_rate is not None
+        and native_rate is not None
+        and target_sample_rate != native_rate
+    ):
+        output = _resample_batch(output, native_rate, target_sample_rate)
+
+    return output

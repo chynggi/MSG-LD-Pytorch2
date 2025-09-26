@@ -6,7 +6,15 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 import torch
 import pytorch_lightning as pl
-from huggingface_hub import HfHubHTTPError, hf_hub_download
+from huggingface_hub import hf_hub_download
+
+try:  # huggingface_hub>=0.17
+    from huggingface_hub.utils import HfHubHTTPError
+except ImportError:  # pragma: no cover - compatibility fallbacks
+    try:  # huggingface_hub older private location
+        from huggingface_hub.utils._errors import HfHubHTTPError
+    except ImportError:  # fallback to legacy top-level
+        from huggingface_hub import HfHubHTTPError  # type: ignore[attr-defined]
 
 from .autoencoders import OobleckDecoder, OobleckEncoder
 
@@ -68,7 +76,7 @@ def _load_checkpoint_path(repo_id: Optional[str], checkpoint_path: Optional[str]
             repo_id,
             (
                 "ear_vae_44k.pth",
-                "ear_vae_44k.pyt",
+                "pretrained_weight/ear_vae_44k.pyt",
                 "ear_vae_44k.ckpt",
                 "model.safetensors",
                 "model.ckpt",
@@ -76,6 +84,41 @@ def _load_checkpoint_path(repo_id: Optional[str], checkpoint_path: Optional[str]
             ),
         )
     return path
+
+
+def _normalize_module_config(module_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Unwrap legacy module configuration dictionaries.
+
+    Descript's public εar-VAE release nests the actual constructor kwargs under
+    a ``config`` key. Other configs might adopt Hydra-style ``params`` fields or
+    include auxiliary metadata such as ``target``.  This helper flattens those
+    formats into a plain kwargs dictionary while preserving any direct entries
+    that are already usable.
+    """
+
+    if module_cfg is None:
+        return {}
+    if not isinstance(module_cfg, dict):
+        raise TypeError(f"Expected module config to be a dict, received {type(module_cfg)!r}.")
+
+    normalized: Dict[str, Any] = {}
+
+    def merge(source: Dict[str, Any]) -> None:
+        for key, value in source.items():
+            normalized[key] = value
+
+    for key in ("config", "params"):
+        value = module_cfg.get(key)
+        if isinstance(value, dict):
+            merge(value)
+
+    skip_keys = {"config", "params", "target", "_target_", "name"}
+    for key, value in module_cfg.items():
+        if key in skip_keys:
+            continue
+        normalized[key] = value
+
+    return normalized
 
 
 @dataclass
@@ -91,10 +134,12 @@ class EarVAEConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EarVAEConfig":
         model_cfg = data.get("model", data)
-        encoder_cfg = model_cfg.get("encoder", {})
-        decoder_cfg = model_cfg.get("decoder", {})
+        encoder_cfg = _normalize_module_config(model_cfg.get("encoder"))
+        decoder_cfg = _normalize_module_config(model_cfg.get("decoder"))
         sample_rate = int(data.get("sample_rate", 44100))
-        downsampling_ratio = int(model_cfg.get("downsampling_ratio", _infer_downsampling_ratio(encoder_cfg)))
+        downsampling_ratio = int(
+            model_cfg.get("downsampling_ratio", _infer_downsampling_ratio(encoder_cfg))
+        )
         latent_dim = int(model_cfg.get("latent_dim", encoder_cfg.get("latent_dim", 64)))
         stems = int(model_cfg.get("stems", data.get("stems", 4)))
         expected_channels = int(encoder_cfg.get("in_channels", 1))
@@ -241,8 +286,12 @@ class EARVAE(pl.LightningModule):
         self._assert_stride_alignment(x)
 
         latents = self.encoder(x)
+        latent_c = latents.shape[1]     
         latent_t = latents.shape[-1]
-        latents = latents.view(batch, stems, self.latent_channels, latent_t, 1)
+        latents = latents.view(batch, stems, latent_c, latent_t, 1)
+        self.latent_channels = latent_c
+        self.z_channels = latent_c
+
         return latents.contiguous()
 
     @torch.no_grad()

@@ -487,10 +487,29 @@ class DDPM(pl.LightningModule):
             return list(batch['text'])
         elif k == 'fname':
             return batch['fname']
-        elif 'fbank' in k: # == 'fbank' or k == 'fbank_1' or k == 'fbank_2':
+        elif 'fbank' in k:  # == 'fbank' or 'fbank_1' or 'fbank_2'
             return batch[k].unsqueeze(1).to(memory_format=torch.contiguous_format).float()
         else:
-            return batch[k].to(memory_format=torch.contiguous_format).float()
+            x = batch[k].to(memory_format=torch.contiguous_format).float()
+
+            # ✅ MUSDB18-HQ stems (batch, 4, samples) 허용
+            if x.dim() == 3 and x.shape[1] == 4:
+                return x
+
+            # 🚨 만약 mix (batch, 2, samples)가 들어오면 에러 발생시켜서 디버깅
+            if x.dim() == 3 and x.shape[1] == 2:
+                raise ValueError(
+                    f"Stereo mix (batch, 2, samples) detected at get_input. "
+                    f"Please modify DataLoader to return stems (batch, 4, samples). "
+                    f"Current shape: {x.shape}"
+                )
+
+            # (batch, samples)도 허용 (mono waveform)
+            if x.dim() == 2:
+                return x
+
+            raise ValueError(f"Unexpected input shape {x.shape}, expected (batch, 4, samples) for stems.")
+
         
     def shared_step(self, batch):
         x = self.get_input(batch, self.first_stage_key)
@@ -1361,8 +1380,7 @@ class MusicLDM(DDPM):
                     xc[select_idx] = nxc
                     xc = xc.detach()
                     xc.requires_grad = False
-                    xc.to(self.device)
-
+                    xc.to(self.device)                    
                 if not self.cond_stage_trainable or force_c_encode:
                     if isinstance(xc, dict) or isinstance(xc, list):
                         c = self.get_learned_conditioning(xc)

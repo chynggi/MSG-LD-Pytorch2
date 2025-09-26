@@ -185,3 +185,17 @@ allowing you to regenerate stems at 44.1 kHz directly from MusicLDM latents.
 - The Stable Audio Open 1.0 autoencoder and related assets are provided under the
 	[Stability AI Community License](licenses/STABILITY_AI_COMMUNITY_LICENSE.txt).
 
+## Citation
+
+```
+@misc{wang2025earperceptuallydrivenhigh,
+      title={Back to Ear: Perceptually Driven High Fidelity Music Reconstruction}, 
+      author={Kangdi Wang and Zhiyue Wu and Dinghao Zhou and Rui Lin and Junyu Dai and Tao Jiang},
+      year={2025},
+      eprint={2509.14912},
+      archivePrefix={arXiv},
+      primaryClass={cs.SD},
+      url={https://arxiv.org/abs/2509.14912}, 
+}
+```
+
