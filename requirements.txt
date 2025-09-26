@@ -35,6 +35,5 @@ wandb
 webdataset
 wget
 git+https://github.com/descriptinc/descript-audio-codec.git
-git+https://github.com/disco-eth/discoder.git
 huggingface_hub>=0.21.0
 stable-audio-tools
