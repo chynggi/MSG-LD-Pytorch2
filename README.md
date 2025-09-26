@@ -21,6 +21,18 @@ To run the code in this repository, you will need python 3.9+
 
 Navigate to the project directory and install the required dependencies
 
+Install system dependencies:
+```bash
+apt-get update
+apt-get install -y pkg-config default-libmysqlclient-dev build-essential
+```
+
+Install Python dependencies:
+```bash
+pip install mysqlclient
+pip install wave==0.0.2
+```
+
 
 
 
@@ -146,4 +158,30 @@ Useful optional flags:
 - `--extensions .wav .flac`: control which file endings count as mixtures.
 - `--per-file-progress`: enables the inner diffusion progress bar if you want
 	detailed feedback per song.
+
+## 🎛️ 44.1 kHz rendering with DISCoder
+
+We now ship a lightweight port of [DISCoder](https://github.com/ETH-DISCO/discoder),
+allowing you to regenerate stems at 44.1 kHz directly from MusicLDM latents.
+
+1. **Install extra dependencies**: `pip install -r requirements.txt` now pulls
+	the Descript Audio Codec (`dac`) and `huggingface_hub`, which DISCoder needs
+	during weight loading.
+2. **Select the dedicated config**: use
+	`config/MSG-LD/multichannel_musicldm_musdb18_eval_44100.yaml` as the entry
+	point. This switches the datamodule to 44.1 kHz / 128-bin mel processing and
+	activates the DISCoder vocoder.
+3. **Export stems at custom rates**: the helper script accepts an optional
+	`--output-sr` flag so you can resample the separated stems without re-running
+	diffusion, e.g. `--output-sr 44100`.
+
+> **Heads-up:** The pretrained MSG-LD checkpoints were trained with 16 kHz / 64 mel
+> bins. To fully benefit from DISCoder you should fine-tune or retrain the VAE and
+> diffusion stack on 44.1 kHz features. The new config acts as a template for that
+> workflow and will warn when mel shapes or sample rates do not match.
+
+## Third-party licenses
+
+- The Stable Audio Open 1.0 autoencoder and related assets are provided under the
+	[Stability AI Community License](licenses/STABILITY_AI_COMMUNITY_LICENSE.txt).
 

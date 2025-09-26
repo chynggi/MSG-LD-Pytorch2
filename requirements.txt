@@ -34,3 +34,6 @@ vector-quantize-pytorch
 wandb
 webdataset
 wget
+dac @ git+https://github.com/descriptinc/descript-audio-codec.git
+huggingface_hub>=0.21.0
+stable-audio-tools

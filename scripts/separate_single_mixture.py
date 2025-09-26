@@ -45,6 +45,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path, required=True, help="Checkpoint containing trained weights")
     parser.add_argument("--mixture", type=Path, required=True, help="Path to the input mixture audio file")
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory to write separated stems")
+    parser.add_argument(
+        "--output-sr",
+        type=int,
+        default=None,
+        help="Optional sampling rate for saved stems; resamples model outputs if provided",
+    )
     parser.add_argument("--device", type=str, default=None, help="Computation device override, e.g. 'cuda:0' or 'cpu'")
     parser.add_argument("--batch-size", type=int, default=1, help="Number of segments to process per diffusion batch")
     parser.add_argument("--overlap", type=float, default=0.0, help="Fractional overlap between consecutive segments (0-0.95)")
@@ -345,11 +351,25 @@ def main() -> None:
     full_length = waveform.size(-1)
     stems = overlap_add(stems_segments, starts, valids, segment_length, full_length, args.overlap)
 
+    output_sample_rate = sample_rate
+    if args.output_sr is not None:
+        if args.output_sr <= 0:
+            raise ValueError("output-sr must be a positive integer")
+        if args.output_sr != sample_rate:
+            stems_tensor = torch.from_numpy(stems).to(dtype=torch.float32)
+            stems_tensor = torchaudio.functional.resample(
+                stems_tensor, sample_rate, args.output_sr
+            )
+            stems = stems_tensor.cpu().numpy()
+            output_sample_rate = args.output_sr
+        else:
+            output_sample_rate = sample_rate
+
     stem_names = data_cfg.get("path", {}).get("stems")
     if not stem_names:
         stem_names = [f"stem_{idx}" for idx in range(stems.shape[0])]
 
-    save_outputs(stems, stem_names, sample_rate, args.output_dir)
+    save_outputs(stems, stem_names, output_sample_rate, args.output_dir)
     print(f"Saved stems to {args.output_dir.resolve()}")
 
 

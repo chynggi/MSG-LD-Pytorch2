@@ -917,7 +917,25 @@ class MusicLDM(DDPM):
             self.init_from_ckpt(ckpt_path, ignore_keys)
             self.restarted_from_ckpt = True
 
-        self.z_channels = first_stage_config["params"]["ddconfig"]["z_channels"]
+        first_stage_params = first_stage_config.get("params", {})
+        z_channels = None
+        if isinstance(first_stage_params, dict):
+            ddconfig = first_stage_params.get("ddconfig", {})
+            if isinstance(ddconfig, dict):
+                z_channels = ddconfig.get("z_channels")
+            elif hasattr(ddconfig, "z_channels"):
+                z_channels = ddconfig.z_channels
+            if z_channels is None:
+                z_channels = first_stage_params.get("latent_channels")
+        else:
+            ddconfig = getattr(first_stage_params, "ddconfig", None)
+            if ddconfig is not None:
+                z_channels = getattr(ddconfig, "z_channels", None)
+        if z_channels is None:
+            z_channels = getattr(self.first_stage_model, "z_channels", None)
+        if z_channels is None:
+            raise KeyError("Unable to determine latent channel count for first-stage model.")
+        self.z_channels = z_channels
 
         self.seperate_stem_z = seperate_stem_z
         self.use_silence_weight = use_silence_weight
@@ -979,11 +997,15 @@ class MusicLDM(DDPM):
             x = super().get_input(batch, self.first_stage_key)
             x = x.to(self.device)
 
-            #### 
-            x = self.adapt_fbank_for_VAE_encoder(x)
-            encoder_posterior = self.encode_first_stage(x)
+            if self.first_stage_key == "fbank_stems":
+                encoder_inputs = self.adapt_fbank_for_VAE_encoder(x)
+            else:
+                encoder_inputs = x
+
+            encoder_posterior = self.encode_first_stage(encoder_inputs)
             z = self.get_first_stage_encoding(encoder_posterior).detach()
-            z=self.adapt_latent_for_LDM(z)
+            if self.first_stage_key == "fbank_stems":
+                z = self.adapt_latent_for_LDM(z)
 
             del self.scale_factor
             self.register_buffer("scale_factor", 1.0 / z.flatten().std())
@@ -1323,18 +1345,21 @@ class MusicLDM(DDPM):
             if return_first_stage_encode:
             
                 if k == "fbank_stems":
-                    # adapt multichannel before processing
                     x_reshaped = self.adapt_fbank_for_VAE_encoder(x)
-
                     encoder_posterior = self.encode_first_stage(x_reshaped)
                     z = self.get_first_stage_encoding(encoder_posterior).detach()
-
                     z = self.adapt_latent_for_LDM(z)
 
                 elif k == "fbank":
-
                     encoder_posterior = self.encode_first_stage(x)
                     z = self.get_first_stage_encoding(encoder_posterior).detach()
+
+                elif k == "waveform_stems":
+                    encoder_posterior = self.encode_first_stage(x)
+                    z = self.get_first_stage_encoding(encoder_posterior).detach()
+                    if z.dim() == 4:
+                        z = z.view(-1, self.num_stems, self.z_channels, z.shape[-2], z.shape[-1])
+
                 else:
                     raise NotImplementedError
             else:
@@ -1529,16 +1554,41 @@ class MusicLDM(DDPM):
         self, mel, savepath=".", bs=None, name="outwav", save=True
     ):
         # Mel: [bs, 1, t-steps, fbins]
-        if len(mel.size()) == 4:
-            mel = mel.squeeze(1)
-        mel = mel.permute(0, 2, 1)
-        waveform = self.first_stage_model.vocoder(mel)
-        waveform = waveform.cpu().detach().numpy()
+        if getattr(self.first_stage_model, "outputs_waveform", False):
+            if isinstance(mel, torch.Tensor):
+                waveform = mel.detach().cpu().numpy()
+            else:
+                waveform = np.asarray(mel)
+            if waveform.ndim == 2:
+                waveform = waveform[:, np.newaxis, :]
+            elif waveform.ndim == 1:
+                waveform = waveform[np.newaxis, np.newaxis, :]
+        else:
+            if len(mel.size()) == 4:
+                mel = mel.squeeze(1)
+            mel = mel.permute(0, 2, 1)
+            waveform_tensor = self.first_stage_model.vocoder(mel)
+            waveform = waveform_tensor.cpu().detach().numpy()
         if save:
             self.save_waveform(waveform, savepath, name)
         return waveform
 
     def save_waveform(self, waveform, savepath, name="outwav"):
+        sample_rate = 16000
+        if hasattr(self, "first_stage_model"):
+            sr_attr = getattr(self.first_stage_model, "vocoder_sample_rate", None)
+            if sr_attr:
+                sample_rate = sr_attr
+            else:
+                vocoder = getattr(self.first_stage_model, "vocoder", None)
+                sample_rate = getattr(vocoder, "_sample_rate", sample_rate)
+        if isinstance(waveform, torch.Tensor):
+            waveform = waveform.detach().cpu().numpy()
+        if waveform.ndim == 1:
+            waveform = waveform[np.newaxis, np.newaxis, :]
+        elif waveform.ndim == 2:
+            waveform = waveform[:, np.newaxis, :]
+
         for i in range(waveform.shape[0]):
             if type(name) is str:
                 path = os.path.join(
@@ -1556,7 +1606,7 @@ class MusicLDM(DDPM):
                 )
             else:
                 raise NotImplementedError
-            sf.write(path, waveform[i, 0], samplerate=16000)
+            sf.write(path, waveform[i, 0], samplerate=sample_rate)
 
     @torch.no_grad()
     def encode_first_stage(self, x):
