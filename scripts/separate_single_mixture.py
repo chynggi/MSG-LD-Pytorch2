@@ -245,7 +245,8 @@ def render_segments(
             samples = model.adapt_latent_for_VAE_decoder(samples)
             mel = model.decode_first_stage(samples)
             waveform = model.mel_spectrogram_to_waveform(mel, save=False)
-            waveform = waveform.astype(np.float32) / 32768.0
+            waveform = waveform.astype(np.float32)
+            np.clip(waveform, -1.0, 1.0, out=waveform)
             segment_waveforms = waveform.reshape(cond.shape[0], model.num_stems, -1)
 
             # Align waveform length with expected segment length.

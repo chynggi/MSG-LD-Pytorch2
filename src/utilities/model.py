@@ -1,7 +1,10 @@
-import os
 import json
+import os
+import sys
 from copy import deepcopy
-from typing import Any, Dict, Optional
+from importlib import import_module
+from pathlib import Path
+from typing import Any, Dict, Optional, Type
 
 import numpy as np
 import torch
@@ -14,6 +17,31 @@ except ImportError:  # pragma: no cover - torchaudio is expected in runtime envs
     AF = None
 
 import hifigan
+
+
+def _import_discoder_class() -> Type[nn.Module]:
+    """Import the local or installed DISCoder class and ensure path availability."""
+
+    try:
+        from discoder.models import DisCoder  # type: ignore[import-not-found]
+        return DisCoder
+    except ImportError as original_exc:  # pragma: no cover - requires optional dependency
+        project_src = Path(__file__).resolve().parents[1]
+        local_discoder_pkg = project_src / "discoder"
+
+        if (local_discoder_pkg / "__init__.py").exists():
+            if str(project_src) not in sys.path:
+                sys.path.insert(0, str(project_src))
+            try:
+                return import_module("discoder.models").DisCoder  # type: ignore[attr-defined]
+            except ImportError as secondary_exc:  # pragma: no cover - sanity check
+                raise ImportError(
+                    "Failed to import DISCoder from the bundled package even after updating sys.path."
+                ) from secondary_exc
+
+        raise ImportError(
+            "DISCoder integration requires either the external 'discoder' package or the bundled copy under 'src/discoder'."
+        ) from original_exc
 
 
 def get_available_checkpoint_keys(model, ckpt):
@@ -118,13 +146,7 @@ class DisCoderVocoder(nn.Module):
         return audio.to(input_device)
 
     def _load_model(self, vocoder_config: Dict[str, Any]) -> nn.Module:
-        try:
-            from discoder.models import DisCoder  # type: ignore[import-not-found]
-        except ImportError as exc:  # pragma: no cover - requires optional dependency
-            raise ImportError(
-                "DISCoder integration requires the 'discoder' package. "
-                "Install it via `pip install git+https://github.com/ETH-DISCO/discoder.git`."
-            ) from exc
+        DisCoder = _import_discoder_class()
 
         repo_id = vocoder_config.get("repo_id")
         revision = vocoder_config.get("revision", "main")
