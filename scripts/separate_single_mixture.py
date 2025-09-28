@@ -37,6 +37,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from latent_diffusion.util import instantiate_from_config  # type: ignore[import-error]  # noqa: E402
 from utilities.audio.stft import TacotronSTFT  # type: ignore[import-error]  # noqa: E402
+from utilities.postprocessing import build_discoder_postprocessor  # type: ignore[import-error]  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -321,6 +322,20 @@ def main() -> None:
     model = build_model(config, args.checkpoint, device)
     stft = prepare_stft(preproc_cfg, device)
 
+    post_cfg = (config.get("postprocessing") or {}).get("discoder")
+    postprocessor = None
+    if post_cfg and post_cfg.get("enabled", True):
+        mel_bins = preproc_cfg.get("mel", {}).get("n_mel_channels")
+        if mel_bins is None:
+            raise ValueError("Missing mel bin configuration required for discoder post-processing.")
+        postprocessor = build_discoder_postprocessor(
+            config=post_cfg,
+            preproc_cfg=preproc_cfg,
+            mel_bins=int(mel_bins),
+            device=device,
+        )
+        print(f"DISCoder post-processing enabled (target {postprocessor.sample_rate} Hz)")
+
     waveform, sr = load_waveform(args.mixture, sample_rate)
     if sr != sample_rate:
         raise RuntimeError(f"Failed to resample mixture to {sample_rate} Hz")
@@ -345,6 +360,11 @@ def main() -> None:
 
     full_length = waveform.size(-1)
     stems = overlap_add(stems_segments, starts, valids, segment_length, full_length, args.overlap)
+
+    if postprocessor is not None:
+        upsampled = postprocessor.process_numpy(stems, device=device)
+        stems = upsampled[:, 0, :]
+        sample_rate = postprocessor.sample_rate
 
     stem_names = data_cfg.get("path", {}).get("stems")
     if not stem_names:

@@ -25,6 +25,8 @@ from latent_diffusion.modules.encoders.modules import CLAPResidualVQ
 import wandb
 from pathlib import Path
 from utilities.sep_evaluation import evaluate_separations
+from utilities.postprocessing import DisCoderPostProcessor
+
 
 from latent_diffusion.util import (
     log_txt_as_img,
@@ -239,7 +241,7 @@ class DDPM(pl.LightningModule):
         self.register_buffer("alphas_cumprod", to_torch(alphas_cumprod))
         self.register_buffer("alphas_cumprod_prev", to_torch(alphas_cumprod_prev))
 
-        # calculations for diffusion q(x_t | x_{t-1}) and others
+        # calculations for diffusion q(x_t | x_0) and others
         self.register_buffer("sqrt_alphas_cumprod", to_torch(np.sqrt(alphas_cumprod)))
         self.register_buffer(
             "sqrt_one_minus_alphas_cumprod", to_torch(np.sqrt(1.0 - alphas_cumprod))
@@ -922,6 +924,8 @@ class MusicLDM(DDPM):
         self.seperate_stem_z = seperate_stem_z
         self.use_silence_weight = use_silence_weight
         self.tau = tau
+        self.waveform_postprocessor: Optional[DisCoderPostProcessor] = None
+        self.waveform_postprocessor_suffix = "discoder"
 
     def configure_optimizers(self):
         lr = self.learning_rate
@@ -1554,6 +1558,10 @@ class MusicLDM(DDPM):
 
     def save_waveform(self, waveform, savepath, name="outwav"):
         sample_rate = getattr(self.first_stage_model, "target_sample_rate", 16000)
+        post_waveform = self._postprocess_waveform_batch(waveform) if self.waveform_postprocessor else None
+        post_sample_rate = None
+        if self.waveform_postprocessor and post_waveform is not None:
+            post_sample_rate = self.waveform_postprocessor.sample_rate
         for i in range(waveform.shape[0]):
             if type(name) is str:
                 path = os.path.join(
@@ -1572,6 +1580,9 @@ class MusicLDM(DDPM):
             else:
                 raise NotImplementedError
             sf.write(path, waveform[i, 0], samplerate=sample_rate)
+            if post_waveform is not None:
+                alt_path = path[:-4] + f"_{self.waveform_postprocessor_suffix}.wav"
+                sf.write(alt_path, post_waveform[i, 0], samplerate=post_sample_rate)
 
     @torch.no_grad()
     def encode_first_stage(self, x):
@@ -2222,7 +2233,7 @@ class MusicLDM(DDPM):
 
                 # Generate multiple samples
                 batch_size = z.shape[0]
-                c = torch.cat([c], dim=0)
+                c = torch.cat([c] * n_gen, dim=0)
 
                 if unconditional_guidance_scale != 1.0:
                     unconditional_conditioning = (
@@ -2267,7 +2278,7 @@ class MusicLDM(DDPM):
                         _, h, w = samples.shape[0], samples.shape[2], samples.shape[3]
 
                         mask = torch.ones(batch_size, h, w).to(self.device)
-                        mask[:, 3 * (h // 16) :, :] = 0
+                        mask[:, 3 * (h // 4) :, :] = 0
                         mask = mask[:, None, ...]
 
                         rolled_sample = torch.roll(samples, shifts=(h // 4), dims=2)
@@ -2424,436 +2435,6 @@ class MusicLDM(DDPM):
                 if waveform.dtype == 'float16':
                     waveform = waveform.astype('float32')
                     
-
-                # downmix to songs for comparison
-                waveform_reshaped = waveform.reshape(batch_size, self.num_stems, waveform.shape[-1])
-                mix = waveform_reshaped.sum(axis=1)
-
-                waveform = np.nan_to_num(waveform)
-                waveform = np.clip(waveform, -1, 1)
-                
-                mix = np.nan_to_num(mix)
-                mix = np.clip(mix, -1, 1)
-
-
-                if self.model.conditioning_key is not None:
-                    if self.cond_stage_model.embed_mode == "text": # TODO maybe make similar for audio (???)
-                        similarity = self.cond_stage_model.cos_similarity(
-                            torch.FloatTensor(mix).squeeze(1), text
-                        )
-
-                        best_index = []
-                        for i in range(z.shape[0]):
-                            candidates = similarity[i :: z.shape[0]]
-                            max_index = torch.argmax(candidates).item()
-                            best_index.append(i + max_index * z.shape[0])
-                            # print("Similarity between generated audio and text", similarity)
-                            # print("Choose the following indexes:", best_index)
-                    else:
-                        best_index = torch.arange(z.shape[0])
-                else:
-                    best_index = torch.arange(z.shape[0])
-
-                # chose best scored mixes
-                mix = mix[best_index]
-
-                # chose coresponding stems audios and mels:
-                selected_wavs = []
-                selected_mels = []
-                for start_index in best_index:
-
-                    actual_start_index = start_index * self.num_stems
-
-                    # Ensure the selection does not exceed array bounds
-                    selected_slice = waveform[actual_start_index:actual_start_index + self.num_stems]
-                    selected_wavs.append(selected_slice)
-
-                    selected_slice = mel[actual_start_index:actual_start_index + self.num_stems].cpu().detach().numpy()
-                    selected_mels.append(selected_slice)
-
-                    
-                waveform = np.concatenate(selected_wavs, axis=0)[:,0,:]
-                waveform = waveform.reshape(z.shape[0], self.num_stems, waveform.shape[-1]) # back to batch size and multicahnnel
-
-                # test_names =  [str(number) for number in range(4)]                
-                # self.save_waveform(waveform[1][:, np.newaxis, :], "/home/karchkhadze/MusicLDM-Ext/test_folder", name=test_names)
-
-
-                mel = np.concatenate(selected_mels, axis=0)[:,0,:]
-                mel = mel.reshape(z.shape[0], self.num_stems, mel.shape[-2], mel.shape[-1]) # back to batch size and multicahnnel
-
-                ############################# saving audios for metrics ##################################
-                save_targets = self.evaluation_params.get("save_targets", True)
-
-                generated_mix_dir = os.path.join(waveform_save_path, "mix")
-                os.makedirs(generated_mix_dir, exist_ok=True)
-                if mix.ndim == 1:
-                    mix = mix[np.newaxis, :]
-                self.save_waveform(mix[:, np.newaxis, :], generated_mix_dir, name=fnames)
-
-                # initialise placeholders for optional target logging
-                target_mix = None
-                target_waveforms = None
-
-                if save_targets:
-                    target_mix_dir = os.path.join(wavefor_target_save_path, "mix")
-                    os.makedirs(target_mix_dir, exist_ok=True)
-                    target_mix = super().get_input(batch, "waveform")
-                    self.save_waveform(target_mix.unsqueeze(1).cpu().detach(), target_mix_dir, name=fnames)
-
-                for i in range(self.num_stems):
-                    generated_stem_dir = os.path.join(waveform_save_path, f"stem_{i}")
-                    os.makedirs(generated_stem_dir, exist_ok=True)
-                    self.save_waveform(waveform[:, i, :][:, np.newaxis, :], generated_stem_dir, name=fnames)
-
-                    generated_stem_mel_dir = os.path.join(waveform_save_path, f"stem_mel_{i}")
-                    os.makedirs(generated_stem_mel_dir, exist_ok=True)
-                    for j in range(mel.shape[0]):
-                        file_path = os.path.join(generated_stem_mel_dir, fnames[j] + ".npy")
-                        np.save(file_path, mel[j, i, :])
-
-                    if save_targets:
-                        if target_waveforms is None:
-                            target_waveforms = super().get_input(batch, "waveform_stems")
-
-                        target_stem_dir = os.path.join(wavefor_target_save_path, f"stem_{i}")
-                        os.makedirs(target_stem_dir, exist_ok=True)
-                        self.save_waveform(
-                            target_waveforms[:, i, :].unsqueeze(1).cpu().detach(),
-                            target_stem_dir,
-                            name=fnames,
-                        )
-
-                        target_stem_mel_dir = os.path.join(wavefor_target_save_path, f"stem_mel_{i}")
-                        os.makedirs(target_stem_mel_dir, exist_ok=True)
-                        fbank_targets = batch["fbank_stems"].cpu().numpy()
-                        for j in range(mel.shape[0]):
-                            file_path = os.path.join(target_stem_mel_dir, fnames[j] + ".npy")
-                            np.save(file_path, fbank_targets[j, i, :])
-
-                ###################################### logging ##############################################
-                if self.logger is not None and save_targets and target_waveforms is not None and target_mix is not None:
-                    log_data_batch = mel, waveform, target_waveforms, mix, target_mix, fnames, batch
-                    self.log_images_audios(log_data_batch)
-
-        return waveform_save_path
-
-    def tensor2numpy(self, tensor):
-        return tensor.cpu().detach().numpy()
-    
-    def log_images_audios(self, log_data_batch):
-        mel, waveform, target_waveforms, mix, target_mix, fnames, batch = log_data_batch
-
-        # Use get to safely access "text" from batch, defaulting to a list of empty string if not found
-        text = batch.get("text", [""] * mel.shape[0])
-
-        # get target mel
-        target_mel = self.tensor2numpy(batch['fbank_stems'])   
-
-        name = "val"
-
-        ### logginh spectrograms ###
-        for i in range(mel.shape[0]):
-            self.logger.log_image(
-                "Mel_specs %s" % name,
-                [np.concatenate([np.flipud(target_mel[i,j].T) for j in range(target_mel[i].shape[0])], axis=0), 
-                 np.concatenate([np.flipud(mel[i,j].T) for j in range(mel[i].shape[0])], axis=0) ],
-
-                caption=["target_fbank_%s" % fnames[i]+text[i], "generated_%s" %fnames[i]+text[i]],
-            )
-
-            ### logging audios ###
-
-            log_dict = {}
-
-            log_dict ["target_%s"% name] =  wandb.Audio(
-                        self.tensor2numpy(target_mix)[i], caption= f"Full Song: {fnames[i]} {text[i]}", sample_rate=16000,)
-            log_dict ["generated_%s"% name] =wandb.Audio(
-                        mix[i], caption= f"Full Song: {fnames[i]} {text[i]}", sample_rate=16000,)
-
-            for k in range(self.num_stems):
-                log_dict[f"{name}_target_stem{k}"] = wandb.Audio(
-                            self.tensor2numpy(target_waveforms)[i,k], caption= f"Stem {k}: {fnames[i]} {text[i]}", sample_rate=16000,)
-                log_dict[f"{name}_generated_stem{k}"] = wandb.Audio(
-                            waveform[i,k], caption= f"Stem {k}: {fnames[i]} {text[i]}" , sample_rate=16000,)
-
-            # self.logger.experiment.log(
-            #     {
-            #         "target_%s"
-            #         % name: wandb.Audio(
-            #             self.tensor2numpy(target_mix)[i], caption= f"Full Song: {fnames[i]} {text[i]}", sample_rate=16000,
-            #         ),
-            #         "generated_%s"
-            #         % name: wandb.Audio(
-            #             mix[i], caption= f"Full Song: {fnames[i]} {text[i]}", sample_rate=16000,
-            #         ),
-            #     }
-            # )
-
-            # for k in range(self.num_stems):
-            #     self.logger.experiment.log(
-            #         {
-            #             f"{name}_target_stem{k}": wandb.Audio(
-            #                 self.tensor2numpy(target_waveforms)[i,k], caption= f"Stem {k}: {fnames[i]} {text[i]}", sample_rate=16000,
-            #             ),
-            #             f"{name}_generated_stem{k}": wandb.Audio(
-            #                 waveform[i,k], caption= f"Stem {k}: {fnames[i]} {text[i]}" , sample_rate=16000,
-            #             ),
-            #         }
-            #     )
-
-
-            # Log all audio files together
-            self.logger.experiment.log(log_dict)
-
-
-
-
-    @torch.no_grad()
-    def audio_continuation(
-        self,
-        batchs,
-        ddim_steps=200,
-        ddim_eta=1.0,
-        x_T=None,
-        n_gen=1,
-        unconditional_guidance_scale=1.0,
-        unconditional_conditioning=None,
-        name="waveform",
-        use_plms=False,
-        **kwargs,
-    ):
-        assert x_T is None
-        try:
-            batchs = iter(batchs)
-        except TypeError:
-            raise ValueError("The first input argument should be an iterable object")
-
-        if use_plms:
-            assert ddim_steps is not None
-
-        use_ddim = ddim_steps is not None
-        waveform_save_path = os.path.join(self.get_log_dir(), name)
-        os.makedirs(waveform_save_path, exist_ok=True)
-        print("Waveform save path: ", waveform_save_path)
-        with self.ema_scope("Plotting Inpaint"):
-            for batch in batchs:
-                z, c = self.get_input(
-                    batch,
-                    self.first_stage_key,
-                    return_first_stage_outputs=False,
-                    force_c_encode=True,
-                    return_original_cond=False,
-                    bs=None,
-                )
-                text = super().get_input(batch, "text")
-
-                # Generate multiple samples
-                batch_size = z.shape[0] * n_gen
-                c = torch.cat([c] * n_gen, dim=0)
-                text = text * n_gen
-
-                if unconditional_guidance_scale != 1.0:
-                    unconditional_conditioning = (
-                        self.cond_stage_model.get_unconditional_condition(batch_size)
-                    )
-
-                fnames = list(super().get_input(batch, "fname"))
-
-                _, h, w = z.shape[0], z.shape[2], z.shape[3]
-
-                mask = torch.ones(batch_size, h * 2, w).to(self.device)
-                mask[:, h:, :] = 0
-                mask = mask[:, None, ...]
-
-                z = torch.cat([z, torch.zeros_like(z)], dim=2)
-                samples, _ = self.sample_log(
-                    cond=c,
-                    batch_size=batch_size,
-                    x_T=x_T,
-                    ddim=use_ddim,
-                    ddim_steps=ddim_steps,
-                    eta=ddim_eta,
-                    unconditional_guidance_scale=unconditional_guidance_scale,
-                    unconditional_conditioning=unconditional_conditioning,
-                    mask=mask,
-                    use_plms=use_plms,
-                    x0=torch.cat([z] * n_gen, dim=0),
-                )
-
-                mel = self.decode_first_stage(samples)
-
-                waveform = self.mel_spectrogram_to_waveform(
-                    mel, savepath=waveform_save_path, bs=None, name=fnames, save=False
-                )
-
-                similarity = self.cond_stage_model.cos_similarity(
-                    torch.FloatTensor(waveform).squeeze(1), text
-                )
-
-                best_index = []
-                for i in range(z.shape[0]):
-                    candidates = similarity[i :: z.shape[0]]
-                    max_index = torch.argmax(candidates).item()
-                    best_index.append(i + max_index * z.shape[0])
-
-                waveform = waveform[best_index]
-
-                print("Similarity between generated audio and text", similarity)
-                print("Choose the following indexes:", best_index)
-
-                self.save_waveform(waveform, waveform_save_path, name=fnames)
-
-    @torch.no_grad()
-    def generate_inpaint_mask(self, z, stemidx_to_inpaint: List[int]):
-        mask = torch.ones_like(z)
-        for stem_idx in stemidx_to_inpaint:
-            # channel_start = stem_idx * 8  # Calculate the start channel for the instrument
-            # channel_end = channel_start + 8  # Calculate the end channel for the instrument
-            mask[:, stem_idx, :, :, :] = 0.0  # Mask the channels for the instrument
-        return mask
-
-
-    @torch.no_grad()
-    def inpainting(
-        self,
-        batchs,
-        ddim_steps=200,
-        ddim_eta=1.0,
-        x_T=None,
-        n_gen=1,
-        unconditional_guidance_scale=1.0,
-        unconditional_conditioning=None,
-        name="waveform",
-        use_plms=False,
-        **kwargs,
-    ):
-        assert x_T is None
-        try:
-            batchs = iter(batchs)
-        except TypeError:
-            raise ValueError("The first input argument should be an iterable object")
-
-        if use_plms:
-            assert ddim_steps is not None
-
-        use_ddim = ddim_steps is not None
-        waveform_save_path = os.path.join(self.get_log_dir(), name)
-        os.makedirs(waveform_save_path, exist_ok=True)
-        print("Waveform save path: ", waveform_save_path)
-
-        wavefor_target_save_path = os.path.join(self.get_log_dir(), "target_%s" % (self.global_step))
-        os.makedirs(wavefor_target_save_path, exist_ok=True)
-        print("\nWaveform target save path: ", wavefor_target_save_path)      
-
-
-
-        with self.ema_scope("Plotting Inpaint"):
-            for batch in batchs:
-                z, c = self.get_input(
-                    batch,
-                    self.first_stage_key,
-                    return_first_stage_outputs=False,
-                    force_c_encode=True,
-                    return_original_cond=False,
-                    bs=None,
-                )
-                # text = super().get_input(batch, "text")
-
-                # # Generate multiple samples
-                # batch_size = z.shape[0] * n_gen
-                # c = torch.cat([c] * n_gen, dim=0)
-                # text = text * n_gen
-
-                # if unconditional_guidance_scale != 1.0:
-                #     unconditional_conditioning = (
-                #         self.cond_stage_model.get_unconditional_condition(batch_size)
-                #     )
-
-                if self.cond_stage_model is not None:
-
-                    # Generate multiple samples
-                    batch_size = z.shape[0] * n_gen
-
-                    if self.cond_stage_model.embed_mode == "text":
-                        text = super().get_input(batch, "text")
-                       
-                        if c is not None:
-                            c = torch.cat([c] * n_gen, dim=0)
-                        text = text * n_gen
-                    elif self.cond_stage_model.embed_mode == "audio":
-                        text = super().get_input(batch, "waveform")
-
-                        if c is not None:
-                            c = torch.cat([c] * n_gen, dim=0)
-                        text = torch.cat([text] * n_gen, dim=0)
-
-                    if unconditional_guidance_scale != 1.0:
-                        unconditional_conditioning = (
-                            self.cond_stage_model.get_unconditional_condition(batch_size)
-                        )
-                else:
-                    batch_size = z.shape[0]
-                    text = None
-
-
-                fnames = list(super().get_input(batch, "fname"))
-
-                # _, h, w = z.shape[0], z.shape[2], z.shape[3]
-
-                # mask = torch.ones(batch_size, h, w).to(self.device)
-                # mask[:, h // 4 : 3 * (h // 4), :] = 0
-                # mask = mask[:, None, ...]
-
-                mask = self.generate_inpaint_mask(z, kwargs["stemidx_to_inpaint"])
-
-
-                samples, _ = self.sample_log(
-                    cond=c,
-                    batch_size=batch_size,
-                    x_T=x_T,
-                    ddim=use_ddim,
-                    ddim_steps=ddim_steps,
-                    eta=ddim_eta,
-                    unconditional_guidance_scale=unconditional_guidance_scale,
-                    unconditional_conditioning=unconditional_conditioning,
-                    mask=mask,
-                    use_plms=use_plms,
-                    x0=torch.cat([z] * n_gen, dim=0),
-                )
-
-                # mel = self.decode_first_stage(samples)
-
-                # waveform = self.mel_spectrogram_to_waveform(
-                #     mel, savepath=waveform_save_path, bs=None, name=fnames, save=False
-                # )
-
-                # similarity = self.cond_stage_model.cos_similarity(
-                #     torch.FloatTensor(waveform).squeeze(1), text
-                # )
-
-                # best_index = []
-                # for i in range(z.shape[0]):
-                #     candidates = similarity[i :: z.shape[0]]
-                #     max_index = torch.argmax(candidates).item()
-                #     best_index.append(i + max_index * z.shape[0])
-
-                # waveform = waveform[best_index]
-
-                # print("Similarity between generated audio and text", similarity)
-                # print("Choose the following indexes:", best_index)
-
-                # self.save_waveform(waveform, waveform_save_path, name=fnames)
-
-                samples = self.adapt_latent_for_VAE_decoder(samples)
-                mel = self.decode_first_stage(samples)
-
-                waveform = self.mel_spectrogram_to_waveform(
-                    mel, savepath=waveform_save_path, bs=None, name=fnames, save=False
-                )
-
-                waveform = np.nan_to_num(waveform)
-                waveform = np.clip(waveform, -1, 1)
 
                 # downmix to songs for comparison
                 waveform_reshaped = waveform.reshape(batch_size, self.num_stems, waveform.shape[-1])
@@ -3059,7 +2640,7 @@ class MusicLDM(DDPM):
                 _, h, w = z.shape[0], z.shape[2], z.shape[3]
 
                 mask = torch.ones(batch_size, h, w).to(self.device)
-                mask[:, int(h * 0.325) :, :] = 0
+                mask[:, h:, :] = 0
                 mask = mask[:, None, ...]
 
                 samples, _ = self.sample_log(
@@ -3193,85 +2774,21 @@ class MusicLDM(DDPM):
 
                 self.save_waveform(waveform, waveform_save_path, name=fnames)
 
+    def configure_waveform_postprocessor(
+        self,
+        processor: DisCoderPostProcessor,
+        suffix: Optional[str] = None,
+    ) -> None:
+        self.waveform_postprocessor = processor.to(self.device)
+        if suffix:
+            self.waveform_postprocessor_suffix = suffix
 
-class DiffusionWrapper(pl.LightningModule):
-    def __init__(self, diff_model_config, conditioning_key):
-        super().__init__()
-        self.diffusion_model = instantiate_from_config(diff_model_config)
-        self.conditioning_key = conditioning_key
-        assert self.conditioning_key in [
-            None,
-            "concat",
-            "crossattn",
-            "hybrid",
-            "adm",
-            "film",
-        ]
-
-    def forward(
-        self, x, t, c_concat: list = None, c_crossattn: list = None, c_film: list = None
-    ):
-        x = x.contiguous()
-        t = t.contiguous()
-
-        if self.conditioning_key is None:
-            out = self.diffusion_model(x, t)
-        elif self.conditioning_key == "concat":
-            xc = torch.cat([x] + c_concat, dim=2)
-            out = self.diffusion_model(xc, t)
-        elif self.conditioning_key == "crossattn":
-            cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(x, t, context=cc)
-        elif self.conditioning_key == "hybrid":
-            xc = torch.cat([x] + c_concat, dim=1)
-            cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(xc, t, context=cc)
-        elif (
-            self.conditioning_key == "film"
-        ):  # The condition is assumed to be a global token, which wil pass through a linear layer and added with the time embedding for the FILM
-            cc = c_film[0].squeeze(1)  # only has one token
-            out = self.diffusion_model(x, t, y=cc)
-        elif self.conditioning_key == "adm":
-            cc = c_crossattn[0]
-            out = self.diffusion_model(x, t, y=cc)
-        else:
-            raise NotImplementedError()
-
-        return out
-
-class CLAPResidualVQWrapper(pl.LightningModule):
-    def __init__(self, clap_rvq_config, clap_model):
-        super().__init__()
-        self.claprvq = CLAPResidualVQ(**clap_rvq_config, clap_wrapper=clap_model)
-        self.clap_rvq_config = clap_rvq_config
-
-    def training_step(self, x):
-        print(self.training, self.claprvq.training, self.claprvq.rvq.training)
-        loss, _, _ = self.claprvq(x, is_text = self.clap_rvq_config['data_type'] == 'text')
-        self.log('loss', loss, on_epoch=True, on_step=True, prog_bar=True)
-        return loss
-    
-    def validation_step(self, x):
-        self.eval()
-        with torch.no_grad():
-            loss, _, _ = self.claprvq(x, is_text = self.clap_rvq_config['data_type'] == 'text')
-            self.log('valid_loss', loss, on_epoch=True, on_step=True, prog_bar=True)
-        return loss
-    
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(None, lr = 0.)
-        return optimizer
-
-
-if __name__ == "__main__":
-    import yaml
-    from latent_diffusion.models.latent_diffusion import LatentDiffusion  # type: ignore[import-not-found]
-
-    model_config = "/mnt/fast/nobackup/users/hl01486/projects/general_audio_generation/stable-diffusion/models/ldm/text2img256/config.yaml"
-    model_config = yaml.load(open(model_config, "r"), Loader=yaml.FullLoader)
-
-    latent_diffusion = LatentDiffusion(**model_config["model"]["params"])
-
-    import ipdb  # type: ignore[import-not-found]
-
-    ipdb.set_trace()
+    def _postprocess_waveform_batch(self, waveform: np.ndarray) -> Optional[np.ndarray]:
+        if self.waveform_postprocessor is None:
+            return None
+        tensor = torch.from_numpy(waveform).float()
+        if tensor.dim() == 3 and tensor.size(1) == 1:
+            tensor = tensor.squeeze(1)
+        tensor = tensor.to(self.device)
+        audio = self.waveform_postprocessor.process_tensor(tensor)
+        return audio.detach().cpu().numpy()

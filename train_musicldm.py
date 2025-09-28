@@ -22,6 +22,7 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from utilities.tools import listdir_nohidden, get_restore_step, copy_test_subset_data
+from utilities.postprocessing import build_discoder_postprocessor
 
 from latent_diffusion.util import instantiate_from_config
     
@@ -184,7 +185,26 @@ def main(config):
 
 
     latent_diffusion = MusicLDM(**config["model"]["params"])
-    # latent_diffusion.test_data_subset_path = config["data"]["params"]['path']['test_data']
+
+    post_cfg = (
+        (config.get("postprocessing") or {}).get("discoder")
+        or config["model"]["params"].get("postprocessing", {}).get("discoder")
+    )
+    if post_cfg and post_cfg.get("enabled", True):
+        preproc_cfg = config["data"]["params"].get("preprocessing", {})
+        mel_bins = preproc_cfg.get("mel", {}).get("n_mel_channels")
+        if mel_bins is None:
+            raise ValueError("Missing mel bin configuration required for discoder post-processing.")
+        processor = build_discoder_postprocessor(
+            config=post_cfg,
+            preproc_cfg=preproc_cfg,
+            mel_bins=int(mel_bins),
+            device=torch.device("cpu"),
+        )
+        latent_diffusion.configure_waveform_postprocessor(
+            processor,
+            suffix=post_cfg.get("file_suffix"),
+        )
 
     multi_device = False
     if isinstance(devices, int):

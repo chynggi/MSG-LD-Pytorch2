@@ -32,6 +32,7 @@ from scripts.separate_single_mixture import (  # noqa: E402
     select_device,
     build_model,
 )
+from utilities.postprocessing import build_discoder_postprocessor  # type: ignore[import-error]  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,6 +101,7 @@ def separate_one_file(
     segment_length: int,
     stem_names: Sequence[str],
     args: argparse.Namespace,
+    postprocessor=None,
 ) -> None:
     waveform, sr = load_waveform(mixture_path, sample_rate)
     if sr != sample_rate:
@@ -123,9 +125,16 @@ def separate_one_file(
 
     full_length = waveform.size(-1)
     stems = overlap_add(stems_segments, starts, valids, segment_length, full_length, args.overlap)
+    output_sample_rate = sample_rate
+
+    if postprocessor is not None:
+        device = next(model.parameters()).device
+        upsampled = postprocessor.process_numpy(stems, device=device)
+        stems = upsampled[:, 0, :]
+        output_sample_rate = postprocessor.sample_rate
 
     target_dir = output_root / mixture_path.stem
-    save_outputs(stems, stem_names, sample_rate, target_dir)
+    save_outputs(stems, stem_names, output_sample_rate, target_dir)
 
 
 def main() -> None:
@@ -156,6 +165,20 @@ def main() -> None:
     model = build_model(config, args.checkpoint, device)
     stft = prepare_stft(preproc_cfg, device)
 
+    post_cfg = (config.get("postprocessing") or {}).get("discoder")
+    postprocessor = None
+    if post_cfg and post_cfg.get("enabled", True):
+        mel_bins = preproc_cfg.get("mel", {}).get("n_mel_channels")
+        if mel_bins is None:
+            raise ValueError("Missing mel bin configuration required for discoder post-processing.")
+        postprocessor = build_discoder_postprocessor(
+            config=post_cfg,
+            preproc_cfg=preproc_cfg,
+            mel_bins=int(mel_bins),
+            device=device,
+        )
+        print(f"DISCoder post-processing enabled (target {postprocessor.sample_rate} Hz)")
+
     stem_names = data_cfg.get("path", {}).get("stems")
     if not stem_names:
         num_stems = getattr(model, "num_stems", None)
@@ -182,6 +205,7 @@ def main() -> None:
                 segment_length,
                 stem_names,
                 args,
+                postprocessor=postprocessor,
             )
             iterator.set_postfix_str("done")
         except Exception as exc:  # noqa: BLE001
