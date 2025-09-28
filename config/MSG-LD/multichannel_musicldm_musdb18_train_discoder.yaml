@@ -172,3 +172,12 @@ model:
       unconditional_guidance_scale: 1.0
       ddim_sampling_steps: 200
       n_candidates_per_samples: 1
+
+postprocessing:
+  discoder:
+    enabled: true
+    repo_id: disco-eth/discoder
+    revision: main
+    target_sample_rate: 44100
+    batch_size: 2
+    file_suffix: discoder

@@ -2554,6 +2554,23 @@ class MusicLDM(DDPM):
 
         # get target mel
         target_mel = self.tensor2numpy(batch['fbank_stems'])   
+        target_waveforms_np = self.tensor2numpy(target_waveforms)
+        target_mix_np = self.tensor2numpy(target_mix)
+
+        postprocessor = getattr(self, "waveform_postprocessor", None)
+        hires_suffix = getattr(self, "waveform_postprocessor_suffix", "discoder")
+        hires_sample_rate = None
+        hires_generated_mix = None
+        hires_target_mix = None
+        hires_generated_stem = None
+        hires_target_stem = None
+        if postprocessor is not None:
+            device = self.device
+            hires_sample_rate = postprocessor.sample_rate
+            hires_generated_mix = postprocessor.process_numpy(mix.astype(np.float32), device=device)[:, 0, :]
+            hires_target_mix = postprocessor.process_numpy(target_mix_np.astype(np.float32), device=device)[:, 0, :]
+            hires_generated_stem = postprocessor.process_numpy(waveform[:, 0, :].astype(np.float32), device=device)[:, 0, :]
+            hires_target_stem = postprocessor.process_numpy(target_waveforms_np[:, 0, :].astype(np.float32), device=device)[:, 0, :]
 
         name = "val"
 
@@ -2572,15 +2589,24 @@ class MusicLDM(DDPM):
             log_dict = {}
 
             log_dict ["target_%s"% name] =  wandb.Audio(
-                        self.tensor2numpy(target_mix)[i], caption= f"Full Song: {fnames[i]} {text[i]}", sample_rate=16000,)
-            log_dict ["generated_%s"% name] =wandb.Audio(
-                        mix[i], caption= f"Full Song: {fnames[i]} {text[i]}", sample_rate=16000,)
+                        target_mix_np[i], caption=f"Full Song: {fnames[i]} {text[i]}", sample_rate=16000,)
+            log_dict["generated_%s" % name] = wandb.Audio(
+                        mix[i], caption=f"Full Song: {fnames[i]} {text[i]}", sample_rate=16000,)
 
-            # for k in range(self.num_stems):
             log_dict[f"{name}_target_stem"] = wandb.Audio(
-                        self.tensor2numpy(target_waveforms)[i,0], caption= f"Stem: {fnames[i]} {text[i]}", sample_rate=16000,)
+                        target_waveforms_np[i, 0], caption=f"Stem: {fnames[i]} {text[i]}", sample_rate=16000,)
             log_dict[f"{name}_generated_stem"] = wandb.Audio(
-                        waveform[i,0], caption= f"Stem: {fnames[i]} {text[i]}" , sample_rate=16000,)
+                        waveform[i, 0], caption=f"Stem: {fnames[i]} {text[i]}", sample_rate=16000,)
+
+            if hires_sample_rate is not None:
+                log_dict[f"target_{name}_{hires_suffix}"] = wandb.Audio(
+                            hires_target_mix[i], caption=f"Full Song (hi-res): {fnames[i]} {text[i]}", sample_rate=hires_sample_rate,)
+                log_dict[f"generated_{name}_{hires_suffix}"] = wandb.Audio(
+                            hires_generated_mix[i], caption=f"Full Song (hi-res): {fnames[i]} {text[i]}", sample_rate=hires_sample_rate,)
+                log_dict[f"{name}_target_stem_{hires_suffix}"] = wandb.Audio(
+                            hires_target_stem[i], caption=f"Stem (hi-res): {fnames[i]} {text[i]}", sample_rate=hires_sample_rate,)
+                log_dict[f"{name}_generated_stem_{hires_suffix}"] = wandb.Audio(
+                            hires_generated_stem[i], caption=f"Stem (hi-res): {fnames[i]} {text[i]}", sample_rate=hires_sample_rate,)
 
             # Log all audio files together
             self.logger.experiment.log(log_dict)
